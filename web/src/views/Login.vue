@@ -47,7 +47,7 @@ async function login() {
       <b class="login-wordmark">OpsDeck</b>
       <div>
         <h1>One deck,<br />every cloud.</h1>
-        <p class="login-description">公司内部云资源运维平台</p>
+        <p class="login-description">云资源运维平台</p>
       </div>
       <span class="login-capabilities">服务器 · 监控 · 操作 · 审计</span>
     </section>

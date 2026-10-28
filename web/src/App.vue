@@ -154,7 +154,7 @@ onUnmounted(() => {
               >
             </nav>
             <div class="sidebar-bottom">
-              <ShieldCheck :size="16" /><span>公司内部云资源运维</span>
+              <ShieldCheck :size="16" /><span>云资源运维</span>
             </div>
           </aside>
           <div class="main-shell">
