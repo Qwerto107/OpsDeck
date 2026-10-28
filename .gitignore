@@ -6,3 +6,7 @@ web/dist/
 *.exe
 *.test
 coverage.out
+internal/webui/dist/
+bin/
+.release/
+release-assets/

@@ -4,15 +4,17 @@ import (
 	"crypto/cipher"
 	"crypto/subtle"
 	"errors"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
 	"path"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
+
+	"opsdeck/internal/webui"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -151,26 +153,30 @@ func (a *App) Router() *gin.Engine {
 	auth.POST("/providers", a.require("settings.manage"), a.saveProvider)
 	auth.PUT("/providers/:id", a.require("settings.manage"), a.saveProvider)
 	auth.GET("/audits", a.require("audit.read"), a.audits)
+	frontend := webui.Files()
+	if root := os.Getenv("WEB_DIR"); root != "" {
+		frontend = os.DirFS(root)
+	}
 	r.NoRoute(func(c *gin.Context) {
 		if strings.HasPrefix(c.Request.URL.Path, "/api/") {
 			fail(c, 404, "接口不存在")
 			return
 		}
-		root := os.Getenv("WEB_DIR")
-		if root == "" {
-			root = "web/dist"
-		}
 		clean := path.Clean(c.Request.URL.Path)
-		file := filepath.Join(root, filepath.FromSlash(strings.TrimPrefix(clean, "/")))
 		if strings.HasPrefix(clean, "/assets/") || strings.HasPrefix(clean, "/fonts/") {
-			if _, err := os.Stat(file); err == nil {
-				c.File(file)
+			if info, err := fs.Stat(frontend, strings.TrimPrefix(clean, "/")); err == nil && !info.IsDir() {
+				c.FileFromFS(clean, http.FS(frontend))
 				return
 			}
 			c.Status(404)
 			return
 		}
-		c.File(filepath.Join(root, "index.html"))
+		index, err := fs.ReadFile(frontend, "index.html")
+		if err != nil {
+			fail(c, 503, "前端文件不可用，请先构建前端或使用包含前端的发布版本")
+			return
+		}
+		c.Data(200, "text/html; charset=utf-8", index)
 	})
 	return r
 }

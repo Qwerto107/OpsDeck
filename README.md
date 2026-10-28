@@ -13,6 +13,8 @@
 
 界面依据提供的 HTML 设计实现，采用 Vue 3、TypeScript、Vite 和 Naive UI。后端采用 Go、Gin、GORM、PostgreSQL 和 golang-migrate。详细范围见 [需求说明](requirements.md) 和 [技术选型](docs/tech-stack.md)。
 
+发布包已内嵌前端，使用方法见 [二进制启动](docs/binary.md)。自动构建、GHCR 镜像与版本发布规则见 [发布说明](docs/releasing.md)。
+
 ## 本地开发
 
 开发验证使用 Go 1.26.10、Node.js 22.22.2 和 PostgreSQL 18。依赖由 `go.sum` 和 `web/package-lock.json` 锁定。TypeScript 固定为 5.9.3，与当前 vue-tsc 配合使用。
