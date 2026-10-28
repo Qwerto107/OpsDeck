@@ -1,0 +1,8 @@
+.local/
+.env
+secrets/
+web/node_modules/
+web/dist/
+*.exe
+*.test
+coverage.out
