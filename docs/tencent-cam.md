@@ -1,26 +1,34 @@
 # 腾讯云 CAM 接入策略
 
+[文档中心](README.md) · [使用指南](usage.md)
+
 ## 适用范围
 
-本文面向配置 OpsDeck 云账号的管理员。策略依据当前 [腾讯云适配代码](../internal/app/cloud.go) 整理，覆盖 CVM、轻量应用服务器（Lighthouse）、地域自动发现和云监控。核对日期为 2026-10-28。
+本文面向配置 OpsDeck 云账号的管理员。策略依据当前 [腾讯云适配代码](../internal/app/cloud.go) 整理，覆盖 CVM、轻量应用服务器（Lighthouse）、MySQL、PostgreSQL、地域发现和云监控。核对日期为 2026-10-28。
 
 使用专门的 CAM 子用户创建 API 密钥，再把 Secret ID 和 Secret Key 填入 OpsDeck 的云账号页面。以下策略绑定到该子用户或其用户组，不绑定到 OpsDeck 的平台用户。
 
+查询策略也包含 MySQL、PostgreSQL 的只读展示权限，字段范围与产品接口见 [数据库资源展示](database-resources.md)。数据库不需要下文的 CVM 或 Lighthouse 操作权限。
+
 ## 接口与权限
 
-| 用途 | CAM action | 说明 |
-| --- | --- | --- |
-| CVM 地域发现 | `region:DescribeRegions` | 查询参数为 `Product=cvm`，当前代码使用地域管理系统接口 |
-| Lighthouse 地域发现 | 不在策略中声明 | 调用 `DescribeRegions` API，实际鉴权行为待云端验证 |
-| CVM 列表、详情和操作结果核对 | `cvm:DescribeInstances` | 同时读取实例配置、IP、状态及返回的标签 |
-| Lighthouse 列表、详情和操作结果核对 | `lighthouse:DescribeInstances` | 同时读取实例配置、IP、状态及返回的标签 |
-| 两类实例的监控 | `monitor:GetMonitorData` | 查询 CPU、内存、磁盘空间和网络指标 |
-| CVM 启动 | `cvm:StartInstances` | 单台操作 |
-| CVM 正常、强制关机 | `cvm:StopInstances` | 通过 `StopType` 区分 |
-| CVM 正常、强制重启 | `cvm:RebootInstances` | 通过 `StopType` 区分 |
-| Lighthouse 启动 | `lighthouse:StartInstances` | 单台操作 |
-| Lighthouse 正常、强制关机 | `lighthouse:StopInstances` | 通过 `StopType` 区分 |
-| Lighthouse 正常、强制重启 | `lighthouse:RebootInstances` | 通过 `StopType` 区分 |
+| 用途                                | CAM action                     | 说明                                                   |
+| ----------------------------------- | ------------------------------ | ------------------------------------------------------ |
+| CVM 地域发现                        | `region:DescribeRegions`       | 查询参数为 `Product=cvm`，当前代码使用地域管理系统接口 |
+| Lighthouse 地域发现                 | 不在策略中声明                 | 调用 `DescribeRegions` API，实际鉴权行为待云端验证     |
+| MySQL 地域发现                      | `region:DescribeRegions`       | 查询参数为 `Product=cdb`                               |
+| MySQL 资源展示                      | `cdb:DescribeDBInstances`      | 只读取配置、连接信息和标签                             |
+| PostgreSQL 地域发现                 | `postgres:DescribeRegions`     | 使用 PostgreSQL 产品接口                               |
+| PostgreSQL 资源展示                 | `postgres:DescribeDBInstances` | 只读取配置、连接信息和标签                             |
+| CVM 列表、详情和操作结果核对        | `cvm:DescribeInstances`        | 同时读取实例配置、IP、状态及返回的标签                 |
+| Lighthouse 列表、详情和操作结果核对 | `lighthouse:DescribeInstances` | 同时读取实例配置、IP、状态及返回的标签                 |
+| 两类实例的监控                      | `monitor:GetMonitorData`       | 查询 CPU、内存、磁盘空间和网络指标                     |
+| CVM 启动                            | `cvm:StartInstances`           | 单台操作                                               |
+| CVM 正常、强制关机                  | `cvm:StopInstances`            | 通过 `StopType` 区分                                   |
+| CVM 正常、强制重启                  | `cvm:RebootInstances`          | 通过 `StopType` 区分                                   |
+| Lighthouse 启动                     | `lighthouse:StartInstances`    | 单台操作                                               |
+| Lighthouse 正常、强制关机           | `lighthouse:StopInstances`     | 通过 `StopType` 区分                                   |
+| Lighthouse 正常、强制重启           | `lighthouse:RebootInstances`   | 通过 `StopType` 区分                                   |
 
 地域管理系统的 [DescribeRegions](https://cloud.tencent.com/document/product/1596/77930) 与 [Lighthouse DescribeRegions](https://cloud.tencent.com/document/api/1207/55555) 是不同服务的接口，不能用 `cvm:DescribeRegions` 替代当前代码的 CVM 地域查询权限。
 
@@ -44,6 +52,9 @@ Lighthouse 的地域查询 API 存在，但截至核对日期，[官方 CAM 接�
       "effect": "allow",
       "action": [
         "region:DescribeRegions",
+        "cdb:DescribeDBInstances",
+        "postgres:DescribeRegions",
+        "postgres:DescribeDBInstances",
         "cvm:DescribeInstances",
         "lighthouse:DescribeInstances",
         "monitor:GetMonitorData"
@@ -90,14 +101,8 @@ qcs::lighthouse:<地域>:uin/<主账号UIN>:instance/<实例ID>
 ```json
 {
   "effect": "allow",
-  "action": [
-    "cvm:StartInstances",
-    "cvm:StopInstances",
-    "cvm:RebootInstances"
-  ],
-  "resource": [
-    "qcs::cvm:ap-beijing:uin/<主账号UIN>:instance/ins-xxxxxxxx"
-  ]
+  "action": ["cvm:StartInstances", "cvm:StopInstances", "cvm:RebootInstances"],
+  "resource": ["qcs::cvm:ap-beijing:uin/<主账号UIN>:instance/ins-xxxxxxxx"]
 }
 ```
 
@@ -111,17 +116,25 @@ qcs::lighthouse:<地域>:uin/<主账号UIN>:instance/<实例ID>
 
 CAM 决定接入密钥在腾讯云可以调用什么接口、操作哪些资源。OpsDeck 的用户角色决定谁可以通过平台使用这些能力，两层权限都必须满足。
 
-普通与强制关机共用 `StopInstances`，普通与强制重启共用 `RebootInstances`，当前请求分别传入 `StopType=SOFT` 和 `StopType=HARD`。本策略没有把两种方式拆成独立云端权限；OpsDeck 另行校验 `instances.force_stop`、`instances.force_reboot`，并要求输入实例名称确认。
+普通与强制关机共用 `StopInstances`，普通与强制重启共用 `RebootInstances`，当前请求分别传入 `StopType=SOFT` 和 `StopType=HARD`。本策略没有把两种方式拆成独立云端权限；OpsDeck 另行校验 `instances.force_stop`、`instances.force_reboot`，并要求输入“确认”后执行强制操作。
 
 云端 API 的关机参数见 [CVM StopInstances](https://cloud.tencent.com/document/api/213/15743) 和 [Lighthouse StopInstances](https://cloud.tencent.com/document/product/1207/47569)。
 
 ## 接入验证
 
 1. 将策略关联到专用子用户，确认没有额外的全权限策略，然后在 OpsDeck 保存云账号凭证。
-2. 启动 Worker 或点击“同步资源”，检查是否发现 CVM、Lighthouse 地域，以及是否返回实例。
+2. 保存启用的云账号后等待首次同步，或手动同步，检查是否发现各产品地域以及是否返回资源。应用需使用 `all`，或另行运行 Worker。
 3. 检查监控指标。接口返回无数据与鉴权失败需要分别排查；增加 CAM 权限不会让云端未上报的指标出现。
 4. 如需验证操作权限，在指定测试实例上由管理员执行已批准的操作，并确认平台审计与云端结果。
 
 发生 `UnauthorizedOperation` 或 `AuthFailure` 时，核对失败接口、子用户绑定策略、显式拒绝和资源路径。CVM 地域查询失败时核对 `region:DescribeRegions`；Lighthouse 地域查询失败时按前文的 API 鉴权说明排查；监控请求失败时核对 `monitor:GetMonitorData`。不要把 Secret ID、Secret Key 或签名请求头写入排障记录。
 
-本文已与当前代码调用清单及官方权限资料核对。修正版包含 10 个 action，JSON 已完成本地语法检查；尚未在真实 CAM 控制台导入或使用真实云账号验证。
+本文已与当前代码调用清单及官方权限资料核对。修正版包含 13 个 action，JSON 已完成本地语法检查；尚未在真实 CAM 控制台导入或使用真实云账号验证。
+
+## 腾讯云国际站
+
+接入国际站账号时选择“腾讯云国际站”，使用国际站 CAM 凭证。CVM、Lighthouse、地域管理和监控复用本文的接口权限；请求端点按服务切换为 `<service>.intl.tencentcloudapi.com`。国内站账号继续使用原端点。
+
+国际站接口及地域可用性由实际账号和云端返回决定。现有角色范围、强制确认、缓存与手动同步规则保持一致；当前尚未使用真实国际站凭证联调。
+
+官方端点参考：[地域管理](https://indonesia.tencentcloud.com/document/product/1271/71925)、[监控](https://www.tencentcloud.com/document/product/248/39318)、[CVM 重启](https://intl.cloud.tencent.com/document/product/213/33243)。

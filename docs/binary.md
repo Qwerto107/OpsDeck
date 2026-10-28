@@ -1,12 +1,14 @@
-# 二进制启动
+# 二进制部署
+
+[文档中心](https://github.com/Qwerto107/OpsDeck/blob/main/docs/README.md) · [部署指南](https://github.com/Qwerto107/OpsDeck/blob/main/docs/deployment.md)
 
 ## 下载与校验
 
-从 [GitHub Releases](https://github.com/Qwerto107/OpsDeck/releases) 下载系统对应的压缩包及同名 `.sha256` 文件。支持 Linux amd64、arm64、armv6、armv5、loong64，Windows amd64 和 macOS arm64。
+从 [GitHub Releases](https://github.com/Qwerto107/OpsDeck/releases) 下载对应系统的压缩包及同名 `.sha256` 文件。支持 Linux amd64、arm64、armv6、armv5、loong64，Windows amd64 和 macOS arm64。
 
-Windows 使用 ZIP，其余平台使用 tar.gz。程序已内嵌前端，不需要 Node.js 或外置前端目录；数据库仍需要 PostgreSQL。
+Windows 使用 ZIP，其余平台使用 tar.gz。程序内嵌前端，无需 Node.js 或外置前端目录；仍需准备 PostgreSQL。
 
-Linux 校验及解压示例：
+Linux 校验与解压示例：
 
 ```sh
 sha256sum -c opsdeck-linux-amd64.tar.gz.sha256
@@ -14,12 +16,14 @@ tar -xzf opsdeck-linux-amd64.tar.gz
 cd opsdeck-linux-amd64
 ```
 
+Windows 可使用 `Get-FileHash` 核对压缩包 SHA-256，再解压。macOS 可使用 `shasum -a 256 -c` 校验。
+
 ## 初始化与运行
 
-以下为 Linux shell 示例。Windows PowerShell 使用 `$env:变量名='值'` 设置环境变量，程序名称为 `opsdeck.exe`。
+以下使用 Linux shell。先准备数据库和专用密钥目录，并自行创建 12 至 72 字节的初始密码文件，仅允许运行用户读取。
 
 ```sh
-export DATABASE_URL='postgres://opsdeck:你的数据库密码@127.0.0.1:5432/opsdeck?sslmode=disable'
+export DATABASE_URL='postgres://opsdeck:replace-with-db-password@127.0.0.1:5432/opsdeck?sslmode=disable'
 export MASTER_KEY_FILE='./secrets/master.key'
 export APP_URL='http://127.0.0.1:8080'
 export LISTEN_ADDR='127.0.0.1:8080'
@@ -27,18 +31,41 @@ export LISTEN_ADDR='127.0.0.1:8080'
 
 export INIT_USERNAME='admin'
 export INIT_PASSWORD_FILE='./secrets/admin-password'
-# 自行准备密码文件，密码为 12 至 72 字节。
 ./opsdeck init
-# 初始化完成后安全移出初始密码文件。
 ./opsdeck all
 ```
 
-`all` 同时运行 API 和 Worker，省略命令时默认使用 `all`。如需分别运行，可使用 `api` 和 `worker`；合并启动时无需再单独启动 Worker。
+Windows 使用 `opsdeck.exe`，环境变量设置方式如下，其余变量按相同方式设置：
 
-主密钥首次初始化时生成，必须持久保存并与数据库配套备份。现有数据库缺少密钥时不得重新生成密钥。`WEB_DIR` 可用于显式覆盖内嵌前端，正常使用发布包无需设置。
+```powershell
+$env:DATABASE_URL='postgres://opsdeck:replace-with-db-password@127.0.0.1:5432/opsdeck?sslmode=disable'
+$env:MASTER_KEY_FILE='./secrets/master.key'
+$env:APP_URL='http://127.0.0.1:8080'
+$env:INIT_USERNAME='admin'
+$env:INIT_PASSWORD_FILE='./secrets/admin-password'
+.\opsdeck.exe migrate
+.\opsdeck.exe init
+.\opsdeck.exe all
+```
 
-## 同步与访问
+项目没有默认密码。`init` 仅在没有用户时创建管理员，并在首次初始化生成主密钥。初始化后安全移出密码文件，保留主密钥，打开配置的访问地址登录。
 
-资源页面进入和重载仅读取数据库快照，缓存有效期为 3 分钟；过期后保留旧数据，点击更新按钮才触发同步。Worker 和页面不自动回源，Worker 仍执行已入队任务、操作结果核对和到期清理。
+## 命令与配置
 
-腾讯云接入权限见 [CAM 策略](https://github.com/Qwerto107/OpsDeck/blob/main/docs/tencent-cam.md)。生产访问使用 HTTPS，外置 Nginx 配置见 [部署示例](https://github.com/Qwerto107/OpsDeck/blob/main/deploy/nginx.conf.example)。完整配置及首次接入步骤见 [README](https://github.com/Qwerto107/OpsDeck/blob/main/README.md)。
+| 命令      | 用途                                             |
+| --------- | ------------------------------------------------ |
+| `migrate` | 执行内嵌的向上数据库迁移                         |
+| `init`    | 首次生成主密钥及创建管理员                       |
+| `all`     | 同进程运行 API 和 Worker，也是省略命令时的默认值 |
+| `api`     | 只运行 HTTP 服务，不处理队列任务                 |
+| `worker`  | 独立处理任务、操作结果核对和日志清理             |
+
+合并模式无需另开 Worker。程序不自动读取 `.env`，环境变量需由 shell 或服务管理器注入。`WEB_DIR` 可显式覆盖内嵌前端，正常使用发布包无需设置。
+
+主密钥与数据库分别备份、配套恢复。已有数据库缺少对应密钥时不能重新生成替代密钥。完整环境变量、HTTPS、备份及升级步骤见 [部署指南](https://github.com/Qwerto107/OpsDeck/blob/main/docs/deployment.md)。
+
+## 接入与同步
+
+云权限见 [腾讯云 CAM](https://github.com/Qwerto107/OpsDeck/blob/main/docs/tencent-cam.md) 和 [阿里云 RAM](https://github.com/Qwerto107/OpsDeck/blob/main/docs/alibaba-ram.md)。新增云账号后发现地域并首次同步，后续点击“更新”同步数据。
+
+页面进入、重载和 3 分钟缓存过期不触发云请求。Worker 继续执行已入队任务和结果核对，不定时同步资源。数据库仅展示 MySQL、PostgreSQL，不提供操作或专属监控。
