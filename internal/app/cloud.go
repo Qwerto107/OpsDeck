@@ -21,7 +21,8 @@ type Cloud interface {
 	List(context.Context, CloudAccount, string, string) ([]Resource, error)
 	Execute(context.Context, CloudAccount, Resource, string) (string, error)
 	State(context.Context, CloudAccount, Resource) (CloudState, error)
-	Monitor(context.Context, CloudAccount, Resource, []string) map[string]Metric
+	Kinds(CloudAccount) []string
+	MonitorBatch(context.Context, CloudAccount, []Resource, []string) map[string]map[string]Metric
 }
 type CloudError struct {
 	Code, RequestID string
@@ -214,65 +215,108 @@ func (t *Tencent) State(ctx context.Context, ac CloudAccount, r Resource) (Cloud
 	m, _ := items[0].(map[string]any)
 	return CloudState{str(m, "InstanceState"), str(m, "LatestOperationState"), str(m, "LatestOperationRequestId")}, nil
 }
-func (t *Tencent) Monitor(ctx context.Context, ac CloudAccount, r Resource, enabled []string) map[string]Metric {
-	out := map[string]Metric{}
+func (t *Tencent) Kinds(CloudAccount) []string { return []string{"cvm", "lighthouse"} }
+
+func (t *Tencent) MonitorBatch(ctx context.Context, ac CloudAccount, rows []Resource, enabled []string) map[string]map[string]Metric {
+	out := map[string]map[string]Metric{}
+	if len(rows) == 0 {
+		return out
+	}
+	region, kind := rows[0].Region, rows[0].Kind
 	namespace := "QCE/CVM"
 	names := map[string]string{"cpu": "CPUUsage", "memory": "MemUsage", "network_in": "WanIntraffic", "network_out": "WanOuttraffic", "disk": "CvmDiskUsage"}
-	if r.Kind == "lighthouse" {
+	if kind == "lighthouse" {
 		namespace = "QCE/LIGHTHOUSE"
 		names = map[string]string{"cpu": "CpuUsage", "memory": "MemUsage", "network_in": "LighthouseIntraffic", "network_out": "LighthouseOuttraffic", "disk": "DiskUsage"}
 	}
-	for _, key := range enabled {
-		unit := "%"
-		if strings.HasPrefix(key, "network_") {
-			unit = "Mbps"
-			if r.Kind == "lighthouse" {
-				unit = "MB/s"
+	running := []string{}
+	for _, r := range rows {
+		out[r.InstanceID] = map[string]Metric{"disk:mounts": {Status: "unavailable", Reason: fmt.Sprintf("%s 云监控当前查询未提供挂载点明细", kind)}}
+		valid := r.AccountID == ac.ID && r.Region == region && r.Kind == kind
+		for _, key := range enabled {
+			unit := "%"
+			if strings.HasPrefix(key, "network_") {
+				unit = "Mbps"
+				if kind == "lighthouse" {
+					unit = "MB/s"
+				}
 			}
-		}
-		metric := Metric{Unit: unit, Status: "unavailable", Reason: "云监控暂无数据，请检查指标可用条件"}
-		if r.State != "RUNNING" {
-			metric.Reason = "实例未运行，无当前监控数据"
-			out[key] = metric
-			continue
-		}
-		body, e := t.call(ctx, ac, r.Region, "monitor", "2018-07-24", "GetMonitorData", map[string]any{"Namespace": namespace, "MetricName": names[key], "Period": 60, "StartTime": time.Now().Add(-5 * time.Minute).UTC().Format(time.RFC3339), "EndTime": time.Now().UTC().Format(time.RFC3339), "Instances": []any{map[string]any{"Dimensions": []any{map[string]any{"Name": "InstanceId", "Value": r.InstanceID}}}}})
-		if e != nil {
-			metric.Status = "error"
-			metric.Reason = "云监控请求失败：" + e.Error()
-			out[key] = metric
-			continue
-		}
-		for _, dp := range array(body, "DataPoints") {
-			m, ok := dp.(map[string]any)
-			if !ok {
-				continue
+			m := Metric{Unit: unit, Status: "unavailable", Reason: "云监控暂无数据，请检查指标可用条件"}
+			if !valid {
+				m.Status = "error"
+				m.Reason = "监控请求混入其他账号、地域或资源类型"
+			} else if r.State != "RUNNING" {
+				m.Reason = "实例未运行，无当前监控数据"
 			}
-			values, timestamps := array(m, "Values"), array(m, "Timestamps")
-			if len(values) == 0 || len(values) != len(timestamps) {
-				continue
-			}
-			i := len(values) - 1
-			v, ok := values[i].(float64)
-			ts, okTS := timestamps[i].(float64)
-			if !ok || !okTS {
-				continue
-			}
-			sampled := time.Unix(int64(ts), 0)
-			metric.Value = &v
-			metric.SampledAt = &sampled
-			metric.Status = "ok"
-			metric.Reason = ""
+			out[r.InstanceID][key] = m
 		}
-		if key == "disk" && metric.Value != nil {
-			metric.Reason = "云端实例级空间使用率；未返回挂载点明细"
+		if !valid {
+			return out
 		}
-		out[key] = metric
-		if e := ctx.Err(); e != nil {
-			break
+		if r.State == "RUNNING" {
+			running = append(running, r.InstanceID)
 		}
 	}
-	// 实例级最大占用不能冒充某个挂载点；详情页明确保留明细不可用状态。
-	out["disk:mounts"] = Metric{Status: "unavailable", Reason: fmt.Sprintf("%s 云监控当前查询未提供挂载点明细", r.Kind)}
+	// 腾讯云每次只允许同一地域、命名空间的一个指标，最多携带 50 个实例。
+	end := time.Now().UTC()
+	for start := 0; start < len(running); start += 50 {
+		ids := running[start:min(start+50, len(running))]
+		instances := make([]any, 0, len(ids))
+		for _, id := range ids {
+			instances = append(instances, map[string]any{"Dimensions": []any{map[string]any{"Name": "InstanceId", "Value": id}}})
+		}
+		requested := map[string]bool{}
+		for _, id := range ids {
+			requested[id] = true
+		}
+		for _, key := range enabled {
+			body, err := t.call(ctx, ac, region, "monitor", "2018-07-24", "GetMonitorData", map[string]any{"Namespace": namespace, "MetricName": names[key], "Period": 60, "StartTime": end.Add(-5 * time.Minute).Format(time.RFC3339), "EndTime": end.Format(time.RFC3339), "Instances": instances})
+			if err != nil {
+				for _, id := range ids {
+					m := out[id][key]
+					m.Status = "error"
+					m.Reason = "云监控请求失败：" + err.Error()
+					out[id][key] = m
+				}
+				continue
+			}
+			// 响应可能乱序或缺少实例，必须用维度中的实例 ID 匹配，不能依赖数组下标。
+			for _, item := range array(body, "DataPoints") {
+				dp, ok := item.(map[string]any)
+				if !ok {
+					continue
+				}
+				id := ""
+				for _, d := range array(dp, "Dimensions") {
+					if dim, ok := d.(map[string]any); ok && str(dim, "Name") == "InstanceId" {
+						id = str(dim, "Value")
+					}
+				}
+				if !requested[id] {
+					continue
+				}
+				values, times := array(dp, "Values"), array(dp, "Timestamps")
+				if len(values) == 0 || len(values) != len(times) {
+					continue
+				}
+				index := len(values) - 1
+				value, ok := values[index].(float64)
+				ts, okTime := times[index].(float64)
+				if !ok || !okTime {
+					continue
+				}
+				sampled := time.Unix(int64(ts), 0)
+				m := out[id][key]
+				m.Value = &value
+				m.SampledAt = &sampled
+				m.Status = "ok"
+				m.Reason = ""
+				if key == "disk" {
+					m.Reason = "云端实例级空间使用率；未返回挂载点明细"
+				}
+				out[id][key] = m
+			}
+		}
+	}
 	return out
 }

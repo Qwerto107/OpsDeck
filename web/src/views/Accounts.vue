@@ -12,9 +12,10 @@ import {
   NAlert,
   NEmpty,
   useMessage,
+  useDialog,
 } from "naive-ui";
 import type { DataTableColumns } from "naive-ui";
-import { Plus, Cloud, RefreshCw } from "lucide-vue-next";
+import { Plus, Cloud, RefreshCw, Trash2 } from "lucide-vue-next";
 import { api } from "../api";
 import type { Account } from "../types";
 const rows = ref<Account[]>([]),
@@ -23,6 +24,7 @@ const rows = ref<Account[]>([]),
   saving = ref(false),
   error = ref(""),
   message = useMessage(),
+  dialog = useDialog(),
   editing = ref<number | null>(null);
 const form = reactive({
   name: "",
@@ -78,6 +80,24 @@ async function sync(row: Account) {
     message.error((e as Error).message);
   }
 }
+function remove(row: Account) {
+  dialog.warning({
+    title: `删除云账号 ${row.name}？`,
+    content:
+      "将删除平台中的凭证和资源快照，移除角色对应的授权范围。云端资源不受影响，审计和已完成任务保留。账号有未完成任务时无法删除。",
+    positiveText: "删除",
+    negativeText: "取消",
+    onPositiveClick: async () => {
+      try {
+        await api(`/accounts/${row.id}`, "DELETE");
+        message.success("云账号已删除");
+        await load();
+      } catch (e) {
+        message.error((e as Error).message);
+      }
+    },
+  });
+}
 const columns: DataTableColumns<Account> = [
   {
     title: "云账号",
@@ -112,7 +132,7 @@ const columns: DataTableColumns<Account> = [
   {
     title: "操作",
     key: "actions",
-    width: 180,
+    width: 220,
     render: (r) =>
       h("div", { class: "row" }, [
         h(NButton, { size: "small", onClick: () => edit(r) }, () => "编辑"),
@@ -120,6 +140,18 @@ const columns: DataTableColumns<Account> = [
           NButton,
           { size: "small", disabled: !r.enabled, onClick: () => sync(r) },
           () => "同步资源",
+        ),
+        h(
+          NButton,
+          {
+            size: "small",
+            quaternary: true,
+            type: "error",
+            "aria-label": `删除云账号 ${r.name}`,
+            title: "删除云账号",
+            onClick: () => remove(r),
+          },
+          () => h(Trash2, { size: 15 }),
         ),
       ]),
   },

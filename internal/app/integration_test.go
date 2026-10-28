@@ -190,8 +190,9 @@ func (f *fakeCloud) Execute(context.Context, CloudAccount, Resource, string) (st
 func (f *fakeCloud) State(context.Context, CloudAccount, Resource) (CloudState, error) {
 	return f.state, nil
 }
-func (f *fakeCloud) Monitor(context.Context, CloudAccount, Resource, []string) map[string]Metric {
-	return map[string]Metric{}
+func (f *fakeCloud) Kinds(CloudAccount) []string { return []string{"cvm", "lighthouse"} }
+func (f *fakeCloud) MonitorBatch(context.Context, CloudAccount, []Resource, []string) map[string]map[string]Metric {
+	return map[string]map[string]Metric{}
 }
 func TestPostgresWorkerNeverResubmitsUncertainOperation(t *testing.T) {
 	a, u := integrationApp(t)

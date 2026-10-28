@@ -1,6 +1,6 @@
-import { onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, onUnmounted, ref, watch, type Ref } from "vue";
 import { api } from "./api";
-import { useSession } from "./store";
+import type { ResourceCache } from "./types";
 
 interface SyncTask {
   id: number;
@@ -14,13 +14,12 @@ interface Progress {
 export function useResourceSync(
   load: () => Promise<void>,
   target: () => { account_id?: number | null; resource_id?: number },
+  cache: Ref<ResourceCache | undefined>,
 ) {
-  const session = useSession();
   const syncing = ref(false),
     syncStatus = ref(""),
     syncError = ref("");
   let active = true;
-  let interval: ReturnType<typeof setInterval> | undefined;
   let pollTimer: ReturnType<typeof setTimeout> | undefined;
 
   async function refresh() {
@@ -83,19 +82,39 @@ export function useResourceSync(
     }
   }
 
+  const now = ref(Date.now());
+  let expiry: ReturnType<typeof setTimeout> | undefined;
   watch(
-    () => session.settings.refresh_seconds,
-    (seconds) => {
-      clearInterval(interval);
-      interval = setInterval(() => void refresh(), seconds * 1000);
+    cache,
+    (value) => {
+      clearTimeout(expiry);
+      now.value = Date.now();
+      if (value?.updated_at) {
+        const delay =
+          Date.parse(value.updated_at) + value.ttl_seconds * 1000 - now.value;
+        if (delay > 0)
+          expiry = setTimeout(() => {
+            now.value = Date.now();
+          }, delay);
+      }
     },
     { immediate: true },
   );
-  onMounted(() => void refresh());
+  const cacheLabel = computed(() => {
+    const value = cache.value;
+    if (!value?.updated_at) return "尚未成功更新";
+    const expired =
+      now.value - Date.parse(value.updated_at) >= value.ttl_seconds * 1000;
+    return (
+      "更新时间 " +
+      new Date(value.updated_at).toLocaleString("zh-CN", { hour12: false }) +
+      (expired ? " · 缓存已过期" : " · 缓存有效")
+    );
+  });
   onUnmounted(() => {
     active = false;
-    clearInterval(interval);
+    clearTimeout(expiry);
     clearTimeout(pollTimer);
   });
-  return { refresh, syncing, syncStatus, syncError };
+  return { refresh, syncing, syncStatus, syncError, cacheLabel };
 }

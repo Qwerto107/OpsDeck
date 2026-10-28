@@ -12,6 +12,13 @@ import (
 	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
+)
+
+var (
+	errAccountHasActiveTasks = errors.New("cloud account has active tasks")
+	errDeleteSelf            = errors.New("cannot delete current user")
+	errLastActiveAdmin       = errors.New("cannot delete the last active administrator")
 )
 
 func adminOnly(c *gin.Context) bool {
@@ -97,6 +104,73 @@ func (a *App) saveUser(c *gin.Context) {
 		c.JSON(200, gin.H{"id": u.ID, "temporary_password": temp})
 	}
 }
+
+func (a *App) deleteUser(c *gin.Context) {
+	if !adminOnly(c) {
+		return
+	}
+	var user User
+	if a.DB.First(&user, c.Param("id")).Error != nil {
+		fail(c, 404, "用户不存在")
+		return
+	}
+	if user.ID == current(c).ID {
+		fail(c, 409, "不能删除当前登录的管理员账号")
+		return
+	}
+	var adminRoleCount int64
+	if err := a.DB.Table("user_roles").Joins("JOIN roles ON roles.id = user_roles.role_id").Where("user_roles.user_id = ? AND roles.administrator = true", user.ID).Count(&adminRoleCount).Error; err != nil {
+		fail(c, 503, "无法校验管理员账号")
+		return
+	}
+	if user.Enabled && adminRoleCount > 0 {
+		var otherAdmins int64
+		if err := a.DB.Model(&User{}).Joins("JOIN user_roles ON user_roles.user_id = users.id").Joins("JOIN roles ON roles.id = user_roles.role_id").Where("users.enabled = true AND roles.administrator = true AND users.id <> ?", user.ID).Distinct("users.id").Count(&otherAdmins).Error; err != nil {
+			fail(c, 503, "无法校验管理员账号")
+			return
+		}
+		if otherAdmins == 0 {
+			fail(c, 409, "不能删除最后一个启用的管理员账号")
+			return
+		}
+	}
+	if a.mutation(c, "users.delete", user.Username, func(tx *gorm.DB) error {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&user, user.ID).Error; err != nil {
+			return err
+		}
+		if user.ID == current(c).ID {
+			return errDeleteSelf
+		}
+		var adminRoleCount int64
+		if err := tx.Table("user_roles").Joins("JOIN roles ON roles.id = user_roles.role_id").Where("user_roles.user_id = ? AND roles.administrator = true", user.ID).Count(&adminRoleCount).Error; err != nil {
+			return err
+		}
+		if user.Enabled && adminRoleCount > 0 {
+			var otherAdmins int64
+			if err := tx.Model(&User{}).Joins("JOIN user_roles ON user_roles.user_id = users.id").Joins("JOIN roles ON roles.id = user_roles.role_id").Where("users.enabled = true AND roles.administrator = true AND users.id <> ?", user.ID).Distinct("users.id").Count(&otherAdmins).Error; err != nil {
+				return err
+			}
+			if otherAdmins == 0 {
+				return errLastActiveAdmin
+			}
+		}
+		if err := tx.Where("user_id = ?", user.ID).Delete(&Session{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("user_id = ?", user.ID).Delete(&Identity{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("user_id = ?", user.ID).Delete(&OAuthState{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&Audit{}).Where("user_id = ?", user.ID).Update("user_id", nil).Error; err != nil {
+			return err
+		}
+		return tx.Delete(&user).Error
+	}) {
+		c.Status(204)
+	}
+}
 func (a *App) resetPassword(c *gin.Context) {
 	if !adminOnly(c) {
 		return
@@ -177,8 +251,49 @@ func (a *App) saveRole(c *gin.Context) {
 	role.Permissions = in.Permissions
 	role.Scopes = in.Scopes
 	role.Administrator = false
-	if a.mutation(c, "roles.save", in.Name, func(tx *gorm.DB) error { return tx.Save(&role).Error }) {
+	if a.mutation(c, "roles.save", in.Name, func(tx *gorm.DB) error {
+		// 与账号删除按相同顺序锁定账号，避免并发保存失效的授权范围。
+		ids := make([]uint64, 0, len(in.Scopes))
+		for _, scope := range in.Scopes {
+			ids = append(ids, scope.AccountID)
+		}
+		slices.Sort(ids)
+		ids = slices.Compact(ids)
+		for _, id := range ids {
+			var account CloudAccount
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&account, id).Error; err != nil {
+				return err
+			}
+		}
+		return tx.Save(&role).Error
+	}) {
 		c.JSON(200, role)
+	}
+}
+
+func (a *App) deleteRole(c *gin.Context) {
+	if !adminOnly(c) {
+		return
+	}
+	var role Role
+	if a.DB.First(&role, c.Param("id")).Error != nil {
+		fail(c, 404, "角色不存在")
+		return
+	}
+	if role.Administrator {
+		bad(c, "管理员角色不可删除")
+		return
+	}
+	if a.mutation(c, "roles.delete", role.Name, func(tx *gorm.DB) error {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&role, role.ID).Error; err != nil {
+			return err
+		}
+		if role.Administrator {
+			return errors.New("管理员角色不可删除")
+		}
+		return tx.Delete(&role).Error
+	}) {
+		c.Status(204)
 	}
 }
 func (a *App) saveAccount(c *gin.Context) {
@@ -235,6 +350,68 @@ func (a *App) saveAccount(c *gin.Context) {
 		return nil
 	}) {
 		c.JSON(200, ac)
+	}
+}
+
+func (a *App) deleteAccount(c *gin.Context) {
+	var account CloudAccount
+	if a.DB.First(&account, c.Param("id")).Error != nil {
+		fail(c, 404, "云账号不存在")
+		return
+	}
+	resourceIDs := a.DB.Model(&Resource{}).Select("id").Where("account_id = ?", account.ID)
+	var active int64
+	if err := a.DB.Model(&Task{}).Where("(account_id = ? OR resource_id IN (?)) AND status IN ?", account.ID, resourceIDs, []string{"queued", "submitting", "waiting", "unknown"}).Count(&active).Error; err != nil {
+		fail(c, 503, "无法检查云账号任务")
+		return
+	}
+	if active > 0 {
+		if err := a.record(c, a.DB, "accounts.delete", account.Name, "failed", "账号仍有未完成任务"); err != nil {
+			fail(c, 503, "审计服务不可用")
+			return
+		}
+		fail(c, 409, "账号仍有排队或运行中的任务，完成后才能删除")
+		return
+	}
+	if a.mutation(c, "accounts.delete", account.Name, func(tx *gorm.DB) error {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&account, account.ID).Error; err != nil {
+			return err
+		}
+		resourceIDs := tx.Model(&Resource{}).Select("id").Where("account_id = ?", account.ID)
+		var active int64
+		if err := tx.Model(&Task{}).Where("(account_id = ? OR resource_id IN (?)) AND status IN ?", account.ID, resourceIDs, []string{"queued", "submitting", "waiting", "unknown"}).Count(&active).Error; err != nil {
+			return err
+		}
+		if active > 0 {
+			return errAccountHasActiveTasks
+		}
+		var roles []Role
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Find(&roles).Error; err != nil {
+			return err
+		}
+		for i := range roles {
+			scopes := roles[i].Scopes[:0]
+			for _, scope := range roles[i].Scopes {
+				if scope.AccountID != account.ID {
+					scopes = append(scopes, scope)
+				}
+			}
+			if len(scopes) != len(roles[i].Scopes) {
+				roles[i].Scopes = scopes
+				if err := tx.Save(&roles[i]).Error; err != nil {
+					return err
+				}
+			}
+		}
+		if err := tx.Model(&Task{}).Where("account_id = ? OR resource_id IN (?)", account.ID, resourceIDs).Updates(map[string]any{"account_id": nil, "resource_id": nil}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("account_id = ?", account.ID).Delete(&Resource{}).Error; err != nil {
+			return err
+		}
+		return tx.Delete(&account).Error
+	}) {
+		c.Status(204)
 	}
 }
 func (a *App) getSettings(c *gin.Context) {

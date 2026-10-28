@@ -76,7 +76,7 @@ async function commit(confirmed = false) {
     );
     session.settings = saved;
     oldRetention = saved.retention_days;
-    message.success("设置已保存，已打开页面将在刷新后使用新间隔");
+    message.success("设置已保存");
   } catch (e) {
     message.error((e as Error).message);
   } finally {
@@ -158,19 +158,11 @@ onMounted(load);
         >
       </div>
       <div class="form-line">
-        <label>刷新间隔</label>
+        <label>数据缓存</label>
         <div class="control">
-          <div class="row">
-            <n-input-number
-              v-model:value="settings.refresh_seconds"
-              :min="30"
-              :max="3600"
-              class="compact-number"
-            /><span>秒</span>
-          </div>
+          <span>3 分钟</span>
           <div class="hint">
-            默认 60
-            秒，仅在服务器列表或详情页打开且可见时触发同步。关闭页面后停止定时触发，云端采样周期保持不变。
+            页面进入和重载仅读取已有数据；过期后保留旧数据，点击更新按钮才会同步云端数据。
           </div>
         </div>
       </div>

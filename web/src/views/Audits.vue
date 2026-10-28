@@ -25,6 +25,38 @@ const rows = ref<Audit[]>([]),
   busy = ref(false),
   error = ref("");
 let request = 0;
+const actionLabels: Record<string, string> = {
+  "auth.login": "账号登录",
+  "auth.logout": "退出登录",
+  "auth.password": "修改密码",
+  "oauth.login": "第三方登录",
+  "oauth.link": "绑定第三方身份",
+  "oauth.provider.save": "保存身份提供方",
+  "identities.unlink": "解除第三方身份关联",
+  "users.save": "保存用户",
+  "users.delete": "删除用户",
+  "users.reset_password": "重置用户密码",
+  "roles.save": "保存角色",
+  "roles.delete": "删除角色",
+  "accounts.save": "保存云账号",
+  "accounts.delete": "删除云账号",
+  "accounts.sync": "同步云账号",
+  "resources.sync": "刷新资源",
+  "resources.read": "查看资源",
+  "monitor.read": "查看监控",
+  "instances.start": "启动实例",
+  "instances.stop": "关闭实例",
+  "instances.reboot": "重启实例",
+  "instances.force_stop": "强制关闭实例",
+  "instances.force_reboot": "强制重启实例",
+  "users.manage": "管理用户",
+  "roles.manage": "管理角色",
+  "accounts.manage": "管理云账号",
+  "audit.read": "查看审计日志",
+  "settings.manage": "管理系统设置",
+  "settings.save": "保存系统设置",
+  "request.rejected": "请求被拒绝",
+};
 async function load() {
   const seq = ++request;
   busy.value = true;
@@ -69,7 +101,12 @@ const columns: DataTableColumns<Audit> = [
     render: (r) =>
       h("div", [r.actor, h("div", { class: "subline mono" }, r.source_ip)]),
   },
-  { title: "操作", key: "action", width: 170 },
+  {
+    title: "操作",
+    key: "action",
+    width: 170,
+    render: (r) => actionLabels[r.action] || r.action,
+  },
   { title: "目标资源", key: "target", width: 270, ellipsis: { tooltip: true } },
   {
     title: "结果",
@@ -103,10 +140,17 @@ onMounted(load);
         class="filter"
         placeholder="操作人账号"
         clearable
-      /><n-input
+      /><n-select
         v-model:value="action"
         class="filter"
         placeholder="操作类型"
+        :options="
+          Object.entries(actionLabels).map(([value, label]) => ({
+            value,
+            label,
+          }))
+        "
+        filterable
         clearable
       /><n-select
         v-model:value="result"

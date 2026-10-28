@@ -87,7 +87,13 @@ func (a *App) resources(c *gin.Context) {
 		start = (page - 1) * size
 	}
 	end := min(start+size, total)
-	c.JSON(200, gin.H{"items": filtered[start:end], "total": total, "page": page, "page_size": size})
+	selected, _ := strconv.ParseUint(c.Query("account_id"), 10, 64)
+	cache, err := a.resourceCache(u, accounts, selected)
+	if err != nil {
+		fail(c, 503, "无法读取缓存更新时间")
+		return
+	}
+	c.JSON(200, gin.H{"items": filtered[start:end], "total": total, "page": page, "page_size": size, "cache": cache})
 }
 func (a *App) presentResource(u User, r *Resource) {
 	r.AllowedActions = []string{}
@@ -151,7 +157,12 @@ func (a *App) resourceDetail(c *gin.Context) {
 		fail(c, 503, "操作记录暂不可用")
 		return
 	}
-	c.JSON(200, gin.H{"resource": r, "tasks": tasks})
+	cache, err := a.resourceCache(u, []CloudAccount{ac}, ac.ID)
+	if err != nil {
+		fail(c, 503, "无法读取缓存更新时间")
+		return
+	}
+	c.JSON(200, gin.H{"resource": r, "tasks": tasks, "cache": cache})
 }
 func (a *App) action(c *gin.Context) {
 	var in struct {
@@ -176,8 +187,8 @@ func (a *App) action(c *gin.Context) {
 		bad(c, "云账号已停用，无法执行操作")
 		return
 	}
-	if strings.HasPrefix(in.Action, "force_") && in.Confirm != r.Name {
-		bad(c, "请输入完整实例名称确认强制操作")
+	if strings.HasPrefix(in.Action, "force_") && in.Confirm != "确认" {
+		bad(c, "请输入“确认”后才能执行强制操作")
 		return
 	}
 	if (in.Action == "start" && r.State != "STOPPED") || (in.Action != "start" && r.State != "RUNNING") {

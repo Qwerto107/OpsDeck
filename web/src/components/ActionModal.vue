@@ -1,6 +1,14 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
-import { NModal, NCard, NButton, NInput, NAlert, useMessage } from "naive-ui";
+import {
+  NModal,
+  NCard,
+  NButton,
+  NInput,
+  NAlert,
+  NCheckbox,
+  useMessage,
+} from "naive-ui";
 import type { Resource } from "../types";
 import { api } from "../api";
 const props = defineProps<{
@@ -10,14 +18,23 @@ const props = defineProps<{
   }>(),
   emit = defineEmits(["update:show", "done"]);
 const labels: Record<string, string> = {
-  start: "启动",
-  stop: "正常关机",
-  reboot: "正常重启",
+  start: "开机",
+  stop: "关机",
+  reboot: "重启",
   force_stop: "强制关机",
   force_reboot: "强制重启",
 };
-const name = computed(() => labels[props.action] || props.action),
-  forced = computed(() => props.action.startsWith("force_")),
+const forceAction = computed(() =>
+    props.action === "stop" ? "force_stop" : "force_reboot",
+  ),
+  forceAllowed = computed(
+    () => props.resource?.allowed_actions?.includes(forceAction.value) ?? false,
+  ),
+  forced = ref(false),
+  effectiveAction = computed(() =>
+    forced.value ? forceAction.value : props.action,
+  ),
+  name = computed(() => labels[effectiveAction.value] || effectiveAction.value),
   confirmation = ref(""),
   busy = ref(false),
   error = ref(""),
@@ -27,6 +44,7 @@ watch(
   () => {
     confirmation.value = "";
     error.value = "";
+    forced.value = false;
   },
 );
 async function submit() {
@@ -35,7 +53,7 @@ async function submit() {
   error.value = "";
   try {
     await api(`/resources/${props.resource.id}/actions`, "POST", {
-      action: props.action,
+      action: effectiveAction.value,
       confirm: confirmation.value,
     });
     message.success("操作已受理，请在实例详情查看最终结果");
@@ -76,15 +94,20 @@ async function submit() {
             : "此操作会中断实例上的服务，请确认当前可以执行。"
         }}操作过程将记录审计日志。
       </p>
-      <template v-if="forced"
-        ><label class="field-label">请输入实例名称以确认</label
+      <n-checkbox
+        v-if="props.action !== 'start' && forceAllowed"
+        v-model:checked="forced"
+        :disabled="busy"
+        style="margin-top: 16px"
+        >{{ props.action === "stop" ? "强制关机" : "强制重启" }}</n-checkbox
+      ><template v-if="forced"
+        ><label class="field-label" style="margin-top: 16px"
+          >请输入“确认”继续</label
         ><n-input
           v-model:value="confirmation"
-          :placeholder="resource?.name"
+          placeholder="确认"
           :disabled="busy"
-          @keydown.enter="
-            confirmation === resource?.name && submit()
-          " /></template
+          @keydown.enter="confirmation === '确认' && submit()" /></template
       ><n-alert
         v-if="error"
         type="error"
@@ -98,7 +121,7 @@ async function submit() {
         ><n-button
           :type="forced ? 'error' : 'primary'"
           :loading="busy"
-          :disabled="forced && confirmation !== resource?.name"
+          :disabled="forced && confirmation !== '确认'"
           @click="submit"
           >确认{{ name }}</n-button
         >

@@ -30,13 +30,20 @@ import {
 import { api, query } from "../api";
 import { useResourceSync } from "../useResourceSync";
 import { useSession } from "../store";
-import type { Resource, Account, Page, SortRule } from "../types";
+import type {
+  Resource,
+  Account,
+  Page,
+  SortRule,
+  ResourceCache,
+} from "../types";
 import StatusBadge from "../components/StatusBadge.vue";
 import MetricValue from "../components/MetricValue.vue";
 import ActionModal from "../components/ActionModal.vue";
 const session = useSession(),
   message = useMessage(),
   rows = ref<Resource[]>([]),
+  cache = ref<ResourceCache>(),
   accounts = ref<Account[]>([]),
   total = ref(0),
   loading = ref(true),
@@ -80,11 +87,9 @@ const fields = [
     { label: "降序", value: "desc" },
   ];
 const labels: Record<string, string> = {
-  start: "启动",
-  stop: "正常关机",
-  reboot: "正常重启",
-  force_stop: "强制关机",
-  force_reboot: "强制重启",
+  start: "开机",
+  stop: "关机",
+  reboot: "重启",
 };
 const columnLabels: Record<string, string> = {
   kind: "类型",
@@ -274,10 +279,19 @@ const columns = computed<DataTableColumns<Resource>>(() => {
           h(
             NDropdown,
             {
-              options: (r.allowed_actions || []).map((key) => ({
-                key,
-                label: labels[key],
-              })),
+              options: ["start", "stop", "reboot"]
+                .filter(
+                  (key) =>
+                    (r.allowed_actions || []).includes(key) ||
+                    (r.allowed_actions || []).includes(
+                      key === "stop"
+                        ? "force_stop"
+                        : key === "reboot"
+                          ? "force_reboot"
+                          : "",
+                    ),
+                )
+                .map((key) => ({ key, label: labels[key] })),
               onSelect: (key: string) => action(r, key),
             },
             () =>
@@ -326,18 +340,20 @@ async function load(silent = false) {
     if (seq !== request) return;
     rows.value = data.items || [];
     total.value = data.total;
+    cache.value = data.cache;
   } catch (e) {
     if (seq === request) error.value = (e as Error).message;
   } finally {
     if (seq === request) loading.value = false;
   }
 }
-const { refresh, syncing, syncStatus, syncError } = useResourceSync(
+const { refresh, syncing, syncStatus, syncError, cacheLabel } = useResourceSync(
   async () => {
     await load(true);
     accounts.value = await api("/accounts");
   },
   () => ({ account_id: account.value }),
+  cache,
 );
 function filterChanged() {
   page.value = 1;
@@ -495,13 +511,19 @@ onUnmounted(() => {
         clearable
         aria-label="状态筛选"
       />
-      <n-button
-        quaternary
-        :loading="syncing"
-        aria-label="刷新服务器列表"
-        @click="refresh"
-        ><RefreshCw :size="15" /></n-button
-      ><n-popover trigger="click" placement="bottom-end"
+      <div class="row wrap">
+        <n-button
+          quaternary
+          :loading="syncing"
+          aria-label="刷新服务器列表"
+          @click="refresh"
+          ><RefreshCw :size="15" /></n-button
+        ><span class="muted small">{{ cacheLabel }}</span
+        ><span v-if="syncStatus" class="muted small" role="status">{{
+          syncStatus
+        }}</span>
+      </div>
+      <n-popover trigger="click" placement="bottom-end"
         ><template #trigger
           ><n-button class="push"
             ><SlidersHorizontal
@@ -550,9 +572,6 @@ onUnmounted(() => {
       >
     </div>
     <div class="sortbar">
-      <span v-if="syncStatus" class="muted small" role="status">{{
-        syncStatus
-      }}</span>
       <span class="muted small">排序</span
       ><span v-for="(r, i) in sorts" :key="i" class="sort-chip"
         ><small>{{ i + 1 }}</small
@@ -631,8 +650,7 @@ onUnmounted(() => {
         saving ? "保存中…" : "按账号自动记忆排序"
       }}</span
       ><span class="grow" /><span class="muted small"
-        >云监控数据 · 页面打开时每
-        {{ session.settings.refresh_seconds }} 秒更新</span
+        >云监控快照 · 缓存 3 分钟 · 手动更新</span
       >
     </div>
   </div>

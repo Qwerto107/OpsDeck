@@ -5,6 +5,8 @@ import (
 	"errors"
 	"log/slog"
 	"sort"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"gorm.io/gorm"
@@ -196,43 +198,40 @@ func (a *App) syncResources(ctx context.Context, task Task, ac CloudAccount) {
 	if e = a.DB.Model(&task).Update("status", "submitting").Error; e != nil {
 		return
 	}
-	errorsFound := false
+	var errorsFound atomic.Bool
 	discovered := map[string]bool{}
 	discoveryFailed := false
-	// 每个产品独立发现地域，避免向不支持该产品的地域发起实例查询。
-	for _, kind := range []string{"cvm", "lighthouse"} {
+	var pending sync.WaitGroup
+	slots := make(chan struct{}, 4)
+	// 资源类型由云适配层提供；通用调度层不依赖腾讯云产品名称。
+	for _, kind := range a.Cloud.Kinds(ac) {
 		regions, err := a.Cloud.Regions(ctx, ac, kind)
 		if err != nil {
-			errorsFound = true
+			errorsFound.Store(true)
 			discoveryFailed = true
 			continue
 		}
+	regionsLoop:
 		for _, region := range regions {
 			discovered[region] = true
-			rows, e := a.Cloud.List(ctx, ac, region, kind)
-			if e != nil {
-				errorsFound = true
-				continue
+			select {
+			case slots <- struct{}{}:
+			case <-ctx.Done():
+				errorsFound.Store(true)
+				discoveryFailed = true
+				break regionsLoop
 			}
-			ids := []string{}
-			for _, r := range rows {
-				ids = append(ids, r.InstanceID)
-				r.Metrics = a.Cloud.Monitor(ctx, ac, r, settings.Metrics)
-				e = a.DB.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "account_id"}, {Name: "kind"}, {Name: "region"}, {Name: "instance_id"}}, DoUpdates: clause.AssignmentColumns([]string{"name", "public_ip", "private_ip", "spec", "cpu", "memory", "disk", "state", "tags", "tags_error", "metrics", "synced_at"})}).Create(&r).Error
-				if e != nil {
-					errorsFound = true
+			pending.Add(1)
+			go func(region, kind string) {
+				defer pending.Done()
+				defer func() { <-slots }()
+				if err := a.syncRegion(ctx, ac, region, kind, settings.Metrics); err != nil {
+					errorsFound.Store(true)
 				}
-			}
-			// 只有列表完整查询成功，才能把本地缺失资源标记为云端已不存在。
-			q := a.DB.Model(&Resource{}).Where("account_id = ? AND kind = ? AND region = ?", ac.ID, kind, region)
-			if len(ids) > 0 {
-				q = q.Where("instance_id NOT IN ?", ids)
-			}
-			if e := q.Update("state", "NOT_FOUND").Error; e != nil {
-				errorsFound = true
-			}
+			}(region, kind)
 		}
 	}
+	pending.Wait()
 	// 部分发现失败时保留旧地域；不把查询失败误认为资源或地域已经消失。
 	if discoveryFailed {
 		for _, region := range ac.Regions {
@@ -245,14 +244,39 @@ func (a *App) syncResources(ctx context.Context, task Task, ac CloudAccount) {
 	}
 	sort.Strings(ac.Regions)
 	if a.DB.Model(&ac).Select("Regions").Updates(&ac).Error != nil {
-		errorsFound = true
+		errorsFound.Store(true)
 	}
 	message := ""
 	status := "succeeded"
-	if errorsFound {
+	if errorsFound.Load() {
 		message = "地域发现或部分资源同步失败，请检查云账号的地域查询、资源查询权限或云接口状态"
 		status = "failed"
 	}
 	a.DB.Model(&ac).Updates(map[string]any{"last_sync": time.Now(), "sync_error": message})
 	a.finish(task, status, message, "")
+}
+
+func (a *App) syncRegion(ctx context.Context, ac CloudAccount, region, kind string, enabled []string) error {
+	rows, err := a.Cloud.List(ctx, ac, region, kind)
+	if err != nil {
+		return err
+	}
+	metrics := a.Cloud.MonitorBatch(ctx, ac, rows, enabled)
+	ids := make([]string, 0, len(rows))
+	for _, r := range rows {
+		ids = append(ids, r.InstanceID)
+		r.Metrics = metrics[r.InstanceID]
+		if r.Metrics == nil {
+			r.Metrics = map[string]Metric{}
+		}
+		if err := a.DB.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "account_id"}, {Name: "kind"}, {Name: "region"}, {Name: "instance_id"}}, DoUpdates: clause.AssignmentColumns([]string{"name", "public_ip", "private_ip", "spec", "cpu", "memory", "disk", "state", "tags", "tags_error", "metrics", "synced_at"})}).Create(&r).Error; err != nil {
+			return err
+		}
+	}
+	// 列表必须完整查询并成功保存，才标记该地域中已不存在的实例。
+	q := a.DB.Model(&Resource{}).Where("account_id = ? AND kind = ? AND region = ?", ac.ID, kind, region)
+	if len(ids) > 0 {
+		q = q.Where("instance_id NOT IN ?", ids)
+	}
+	return q.Update("state", "NOT_FOUND").Error
 }

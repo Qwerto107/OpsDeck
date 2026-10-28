@@ -2,7 +2,9 @@ package app
 
 import (
 	"context"
+	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -24,6 +26,7 @@ func TestAvailableRegionsValidatesAndFilters(t *testing.T) {
 }
 
 type regionCloud struct {
+	mu sync.Mutex
 	fakeCloud
 	sets           map[string][]string
 	discoveryError bool
@@ -37,7 +40,9 @@ func (f *regionCloud) Regions(_ context.Context, _ CloudAccount, kind string) ([
 	return f.sets[kind], nil
 }
 func (f *regionCloud) List(_ context.Context, _ CloudAccount, region, kind string) ([]Resource, error) {
+	f.mu.Lock()
 	f.listed = append(f.listed, kind+":"+region)
+	f.mu.Unlock()
 	return nil, nil
 }
 func TestPostgresAutomaticRegionsStayProductSpecific(t *testing.T) {
@@ -53,6 +58,7 @@ func TestPostgresAutomaticRegionsStayProductSpecific(t *testing.T) {
 	f := &regionCloud{sets: map[string][]string{"cvm": {"ap-new"}, "lighthouse": {"ap-light"}}}
 	a.Cloud = f
 	a.syncResources(context.Background(), task, ac)
+	sort.Strings(f.listed)
 	if strings.Join(f.listed, ",") != "cvm:ap-new,lighthouse:ap-light" {
 		t.Fatalf("错误的产品地域组合: %v", f.listed)
 	}

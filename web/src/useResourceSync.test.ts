@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ref } from "vue";
+import type { ResourceCache } from "./types";
 import { useResourceSync } from "./useResourceSync";
 
 const hooks = vi.hoisted(() => ({
@@ -30,7 +32,7 @@ afterEach(() => {
 });
 
 describe("页面触发云端同步", () => {
-  it("进入页面触发任务，合并重复点击，完成后读取快照", async () => {
+  it("手动触发任务，合并重复点击，完成后读取快照", async () => {
     const load = vi.fn().mockResolvedValue(undefined);
     request
       .mockResolvedValueOnce({
@@ -42,9 +44,12 @@ describe("页面触发云端同步", () => {
       .mockResolvedValueOnce({
         tasks: [{ id: 7, status: "succeeded", error: "" }],
       });
-    const sync = useResourceSync(load, () => ({ account_id: 2 }));
-    await hooks.mounted[0]!();
-    await vi.advanceTimersByTimeAsync(0);
+    const sync = useResourceSync(
+      load,
+      () => ({ account_id: 2 }),
+      ref<ResourceCache>(),
+    );
+    await sync.refresh();
     expect(request).toHaveBeenCalledWith("/resources/sync", "POST", {
       account_id: 2,
     });
@@ -58,20 +63,20 @@ describe("页面触发云端同步", () => {
     expect(sync.syncing.value).toBe(false);
     expect(sync.syncError.value).toBe("");
   });
-  it("页面可见时按设置触发，隐藏或离开后停止触发", async () => {
+  it("进入页面和缓存过期不触发云请求，手动更新才回源", async () => {
+    const cache = ref<ResourceCache>({
+      updated_at: new Date().toISOString(),
+      ttl_seconds: 180,
+    });
+    const sync = useResourceSync(vi.fn(), () => ({}), cache);
+    hooks.mounted.forEach((fn) => fn());
+    expect(sync.cacheLabel.value).toContain("缓存有效");
+    await vi.advanceTimersByTimeAsync(180001);
+    expect(sync.cacheLabel.value).toContain("缓存已过期");
+    expect(request).not.toHaveBeenCalled();
     request.mockResolvedValue({ tasks: [] });
-    useResourceSync(vi.fn().mockResolvedValue(undefined), () => ({}));
-    await hooks.mounted[0]!();
-    await vi.advanceTimersByTimeAsync(0);
-    await vi.advanceTimersByTimeAsync(60000);
-    expect(request).toHaveBeenCalledTimes(2);
-    vi.stubGlobal("document", { hidden: true });
-    await vi.advanceTimersByTimeAsync(60000);
-    expect(request).toHaveBeenCalledTimes(2);
-    hooks.unmounted.forEach((fn) => fn());
-    vi.stubGlobal("document", { hidden: false });
-    await vi.advanceTimersByTimeAsync(60000);
-    expect(request).toHaveBeenCalledTimes(2);
+    await sync.refresh();
+    expect(request).toHaveBeenCalledWith("/resources/sync", "POST", {});
   });
   it("同步失败显示原因，不冒充更新成功", async () => {
     request
@@ -82,8 +87,9 @@ describe("页面触发云端同步", () => {
     const sync = useResourceSync(
       vi.fn().mockResolvedValue(undefined),
       () => ({}),
+      ref<ResourceCache>(),
     );
-    await hooks.mounted[0]!();
+    await sync.refresh();
     await vi.advanceTimersByTimeAsync(0);
     expect(sync.syncError.value).toBe("地域查询失败");
     expect(sync.syncStatus.value).toContain("失败");

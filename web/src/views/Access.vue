@@ -132,6 +132,23 @@ function reset(u: User) {
     },
   });
 }
+function deleteUser(u: User) {
+  dialog.warning({
+    title: `删除用户 ${u.username}？`,
+    content: "用户的会话和第三方身份关联将被移除，审计记录保留。",
+    positiveText: "删除",
+    negativeText: "取消",
+    onPositiveClick: async () => {
+      try {
+        await api(`/users/${u.id}`, "DELETE");
+        message.success("用户已删除");
+        await load();
+      } catch (e) {
+        message.error((e as Error).message);
+      }
+    },
+  });
+}
 function editRole(r?: Role) {
   Object.assign(roleForm, {
     id: r?.id || 0,
@@ -157,6 +174,23 @@ async function saveRole() {
   } finally {
     saving.value = false;
   }
+}
+function deleteRole(r: Role) {
+  dialog.warning({
+    title: `删除角色 ${r.name}？`,
+    content: "该角色将从所有用户移除，相关权限立即失效。",
+    positiveText: "删除",
+    negativeText: "取消",
+    onPositiveClick: async () => {
+      try {
+        await api(`/roles/${r.id}`, "DELETE");
+        message.success("角色已删除");
+        await load();
+      } catch (e) {
+        message.error((e as Error).message);
+      }
+    },
+  });
 }
 function unlink(row: Identity) {
   dialog.warning({
@@ -191,7 +225,7 @@ const userColumns: DataTableColumns<User> = [
   {
     title: "操作",
     key: "actions",
-    width: 180,
+    width: 220,
     render: (r) =>
       h("div", { class: "row" }, [
         h(
@@ -203,6 +237,19 @@ const userColumns: DataTableColumns<User> = [
           NButton,
           { size: "small", disabled: !admin(), onClick: () => reset(r) },
           () => "重置密码",
+        ),
+        h(
+          NButton,
+          {
+            size: "small",
+            quaternary: true,
+            type: "error",
+            disabled: !admin() || r.id === session.user?.id,
+            "aria-label": `删除用户 ${r.username}`,
+            title: "删除用户",
+            onClick: () => deleteUser(r),
+          },
+          () => h(Trash2, { size: 15 }),
         ),
       ]),
   },
@@ -233,17 +280,32 @@ const roleColumns: DataTableColumns<Role> = [
   {
     title: "操作",
     key: "actions",
-    width: 80,
+    width: 120,
     render: (r) =>
-      h(
-        NButton,
-        {
-          size: "small",
-          disabled: r.administrator,
-          onClick: () => editRole(r),
-        },
-        () => "编辑",
-      ),
+      h("div", { class: "row" }, [
+        h(
+          NButton,
+          {
+            size: "small",
+            disabled: r.administrator,
+            onClick: () => editRole(r),
+          },
+          () => "编辑",
+        ),
+        h(
+          NButton,
+          {
+            size: "small",
+            quaternary: true,
+            type: "error",
+            disabled: r.administrator,
+            "aria-label": `删除角色 ${r.name}`,
+            title: "删除角色",
+            onClick: () => deleteRole(r),
+          },
+          () => h(Trash2, { size: 15 }),
+        ),
+      ]),
   },
 ];
 const identityColumns: DataTableColumns<Identity> = [

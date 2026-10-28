@@ -3,33 +3,31 @@ import { computed, onMounted, ref } from "vue";
 import { useRoute } from "vue-router";
 import { NButton, NAlert, NSkeleton, NEmpty, NTag } from "naive-ui";
 
-import type { Resource, Task } from "../types";
+import type { Resource, Task, ResourceCache } from "../types";
 import { api } from "../api";
 import { useResourceSync } from "../useResourceSync";
-import { useSession } from "../store";
 import StatusBadge from "../components/StatusBadge.vue";
 import MetricValue from "../components/MetricValue.vue";
 import ActionModal from "../components/ActionModal.vue";
 const route = useRoute(),
-  session = useSession(),
   resource = ref<Resource | null>(null),
+  cache = ref<ResourceCache>(),
   tasks = ref<Task[]>([]),
   error = ref(""),
   busy = ref(false),
   modal = ref(false),
   selected = ref("");
 const actions = [
-  ["start", "启动"],
-  ["stop", "正常关机"],
-  ["reboot", "正常重启"],
-  ["force_stop", "强制关机"],
-  ["force_reboot", "强制重启"],
+  ["start", "开机"],
+  ["stop", "关机"],
+  ["reboot", "重启"],
 ];
-const forceTheme = {
-  border: "1px solid #f3c1bc",
-  textColor: "#b42318",
-  borderHover: "1px solid #b42318",
-  textColorHover: "#b42318",
+const actionLabels: Record<string, string> = {
+  start: "开机",
+  stop: "关机",
+  reboot: "重启",
+  force_stop: "强制关机",
+  force_reboot: "强制重启",
 };
 const metricOrder = [
   "cpu",
@@ -56,10 +54,13 @@ async function load() {
   busy.value = true;
   error.value = "";
   try {
-    const data = await api<{ resource: Resource; tasks: Task[] }>(
-      "/resources/" + route.params.id,
-    );
+    const data = await api<{
+      resource: Resource;
+      tasks: Task[];
+      cache: ResourceCache;
+    }>("/resources/" + route.params.id);
     resource.value = data.resource;
+    cache.value = data.cache;
     tasks.value = data.tasks || [];
   } catch (e) {
     error.value = (e as Error).message;
@@ -67,9 +68,10 @@ async function load() {
     busy.value = false;
   }
 }
-const { refresh, syncing, syncStatus, syncError } = useResourceSync(
+const { refresh, syncing, syncStatus, syncError, cacheLabel } = useResourceSync(
   load,
   () => ({ resource_id: Number(route.params.id) }),
+  cache,
 );
 onMounted(() => void load());
 </script>
@@ -100,19 +102,24 @@ onMounted(() => void load());
           </div>
         </div>
         <div class="row wrap instance-actions">
+          <template v-for="[action, label] in actions" :key="action">
           <n-button
-            v-for="[action, label] in actions"
-            :key="action"
-            :theme-overrides="
-              action.startsWith('force') ? forceTheme : undefined
+            v-if="
+              resource.allowed_actions?.includes(action) ||
+              resource.allowed_actions?.includes(
+                action === 'stop'
+                  ? 'force_stop'
+                  : action === 'reboot'
+                    ? 'force_reboot'
+                    : '',
+              )
             "
-            :disabled="!resource.allowed_actions?.includes(action)"
             @click="
               selected = action;
               modal = true;
             "
             >{{ label }}</n-button
-          >
+          ></template>
         </div>
       </section>
       <div class="instance-panels">
@@ -149,6 +156,7 @@ onMounted(() => void load());
           <div class="row spread wrap">
             <h2>当前监控</h2>
             <div class="row wrap">
+              <span class="muted monitor-time">{{ cacheLabel }}</span>
               <span
                 v-if="syncStatus"
                 class="muted monitor-time"
@@ -158,9 +166,6 @@ onMounted(() => void load());
                 >更新</n-button
               >
             </div>
-            <span class="muted monitor-time"
-              >每 {{ session.settings.refresh_seconds }} 秒刷新</span
-            >
           </div>
           <table v-if="metrics.length" class="monitor-table">
             <thead>
@@ -203,9 +208,7 @@ onMounted(() => void load());
         <h2>操作记录</h2>
         <div v-for="task in tasks" :key="task.id" class="operation-record">
           <div>
-            <span>{{
-              actions.find(([key]) => key === task.action)?.[1] || task.action
-            }}</span>
+            <span>{{ actionLabels[task.action] || task.action }}</span>
             <div v-if="task.error" class="hint">{{ task.error }}</div>
             <div v-if="task.request_id" class="hint request-id">
               {{ task.request_id }}

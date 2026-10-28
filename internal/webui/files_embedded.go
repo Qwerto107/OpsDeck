@@ -7,7 +7,7 @@ import (
 	"io/fs"
 )
 
-//go:embed dist
+//go:embed all:dist
 var content embed.FS
 
 // Files 让发布程序无需额外的前端目录即可运行。

@@ -111,6 +111,12 @@ export interface Identity {
   subject: string;
 }
 export interface Page<T> {
+  cache?: ResourceCache;
   items: T[];
   total: number;
+}
+
+export interface ResourceCache {
+  updated_at: string | null;
+  ttl_seconds: number;
 }

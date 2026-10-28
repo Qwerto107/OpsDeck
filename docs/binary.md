@@ -39,6 +39,6 @@ export INIT_PASSWORD_FILE='./secrets/admin-password'
 
 ## 同步与访问
 
-进入服务器列表或详情页、手动更新时触发资源同步；页面打开且可见时按设置间隔更新。Worker 不自主定时创建资源同步任务，仍执行已入队任务、操作结果核对和到期清理。
+资源页面进入和重载仅读取数据库快照，缓存有效期为 3 分钟；过期后保留旧数据，点击更新按钮才触发同步。Worker 和页面不自动回源，Worker 仍执行已入队任务、操作结果核对和到期清理。
 
 腾讯云接入权限见 [CAM 策略](https://github.com/Qwerto107/OpsDeck/blob/main/docs/tencent-cam.md)。生产访问使用 HTTPS，外置 Nginx 配置见 [部署示例](https://github.com/Qwerto107/OpsDeck/blob/main/deploy/nginx.conf.example)。完整配置及首次接入步骤见 [README](https://github.com/Qwerto107/OpsDeck/blob/main/README.md)。
