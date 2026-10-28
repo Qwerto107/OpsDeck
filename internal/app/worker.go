@@ -119,6 +119,10 @@ func (a *App) process(parent context.Context, task Task) {
 		a.finish(task, "failed", "实例记录不存在", task.RequestID)
 		return
 	}
+	if !isServer(r.Kind) {
+		a.finish(task, "failed", "该资源仅支持查看", task.RequestID)
+		return
+	}
 	state, e := a.Cloud.State(ctx, ac, r)
 	if e != nil {
 		if task.Status == "queued" {
@@ -261,7 +265,10 @@ func (a *App) syncRegion(ctx context.Context, ac CloudAccount, region, kind stri
 	if err != nil {
 		return err
 	}
-	metrics := a.Cloud.MonitorBatch(ctx, ac, rows, enabled)
+	metrics := map[string]map[string]Metric{}
+	if !isDatabase(kind) {
+		metrics = a.Cloud.MonitorBatch(ctx, ac, rows, enabled)
+	}
 	ids := make([]string, 0, len(rows))
 	for _, r := range rows {
 		ids = append(ids, r.InstanceID)
@@ -269,7 +276,7 @@ func (a *App) syncRegion(ctx context.Context, ac CloudAccount, region, kind stri
 		if r.Metrics == nil {
 			r.Metrics = map[string]Metric{}
 		}
-		if err := a.DB.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "account_id"}, {Name: "kind"}, {Name: "region"}, {Name: "instance_id"}}, DoUpdates: clause.AssignmentColumns([]string{"name", "public_ip", "private_ip", "spec", "cpu", "memory", "disk", "state", "tags", "tags_error", "metrics", "synced_at"})}).Create(&r).Error; err != nil {
+		if err := a.DB.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "account_id"}, {Name: "kind"}, {Name: "region"}, {Name: "instance_id"}}, DoUpdates: clause.AssignmentColumns([]string{"name", "public_ip", "private_ip", "spec", "cpu", "memory", "disk", "state", "tags", "tags_error", "metrics", "database", "synced_at"})}).Create(&r).Error; err != nil {
 			return err
 		}
 	}

@@ -66,6 +66,13 @@ func integrationApp(t *testing.T) (*App, User) {
 	if e = db.Exec(string(sql)).Error; e != nil {
 		t.Fatal(e)
 	}
+	sql, e = migrations.Files.ReadFile("000003_database_resources.up.sql")
+	if e != nil {
+		t.Fatal(e)
+	}
+	if e = db.Exec(string(sql)).Error; e != nil {
+		t.Fatal(e)
+	}
 	key, e := OpenKey(db, filepath.Join(t.TempDir(), "master.key"), true)
 	if e != nil {
 		t.Fatal(e)

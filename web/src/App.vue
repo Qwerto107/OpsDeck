@@ -12,6 +12,7 @@ import {
 } from "naive-ui";
 import {
   Server,
+  Database,
   Cloud,
   Users,
   ScrollText,
@@ -32,6 +33,12 @@ const entries = [
     to: "/servers",
     title: "服务器",
     icon: Server,
+    permission: "resources.read",
+  },
+  {
+    to: "/databases",
+    title: "数据库",
+    icon: Database,
     permission: "resources.read",
   },
   {

@@ -323,6 +323,7 @@ async function load(silent = false) {
     const data = await api<Page<Resource>>(
       "/resources" +
         query({
+          category: "server",
           q: q.value,
           account_id: account.value,
           kind: kind.value,

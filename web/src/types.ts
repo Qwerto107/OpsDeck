@@ -29,6 +29,12 @@ export interface Metric {
   mount?: string;
 }
 export interface Resource {
+  database?: {
+    engine: string;
+    version: string;
+    memory_gb: number;
+    endpoints: { address: string; port: number; network: string }[];
+  };
   operation_status?: string;
   id: number;
   account_id: number;

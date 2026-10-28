@@ -54,6 +54,7 @@ type Metric struct {
 	Mount     string     `json:"mount,omitempty"`
 }
 type Resource struct {
+	Database        *DatabaseInfo     `json:"database,omitempty" gorm:"serializer:json;type:jsonb"`
 	ID              uint64            `json:"id"`
 	AccountID       uint64            `json:"account_id"`
 	Provider        string            `json:"provider"`
@@ -77,6 +78,19 @@ type Resource struct {
 	OperationStatus string            `json:"operation_status" gorm:"-"`
 }
 
+type DatabaseEndpoint struct {
+	Address string `json:"address"`
+	Port    int    `json:"port"`
+	Network string `json:"network"`
+}
+type DatabaseInfo struct {
+	Engine    string             `json:"engine"`
+	Version   string             `json:"version"`
+	MemoryGB  float64            `json:"memory_gb"`
+	Endpoints []DatabaseEndpoint `json:"endpoints"`
+}
+
+func isDatabase(kind string) bool { return kind == "mysql" || kind == "postgresql" }
 func isServer(kind string) bool {
 	return kind == "cvm" || kind == "lighthouse" || kind == "ecs" || kind == "sas"
 }

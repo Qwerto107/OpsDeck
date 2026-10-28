@@ -10,6 +10,16 @@ const router = createRouter({
     },
     { path: "/", redirect: "/servers" },
     {
+      path: "/databases",
+      component: () => import("./views/Databases.vue"),
+      meta: { title: "数据库", permission: "resources.read" },
+    },
+    {
+      path: "/databases/:id",
+      component: () => import("./views/DatabaseDetail.vue"),
+      meta: { title: "数据库详情", permission: "resources.read" },
+    },
+    {
       path: "/servers",
       component: () => import("./views/Servers.vue"),
       meta: { title: "服务器", permission: "resources.read" },

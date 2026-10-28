@@ -76,9 +76,12 @@ func alibabaProduct(kind string) (string, string) {
 	}
 	return "ecs", "2014-05-26"
 }
-func (a *Alibaba) Kinds(CloudAccount) []string { return []string{"ecs", "sas"} }
+func (a *Alibaba) Kinds(CloudAccount) []string { return []string{"ecs", "sas", "mysql", "postgresql"} }
 func (a *Alibaba) Regions(ctx context.Context, ac CloudAccount, kind string) ([]string, error) {
 	service, version := alibabaProduct(kind)
+	if isDatabase(kind) {
+		service, version = "rds", "2014-08-15"
+	}
 	action := "DescribeRegions"
 	if kind == "sas" {
 		action = "ListRegions"
@@ -175,6 +178,9 @@ func (a *Alibaba) instances(ctx context.Context, ac CloudAccount, region, kind, 
 	return rows, nil
 }
 func (a *Alibaba) List(ctx context.Context, ac CloudAccount, region, kind string) ([]Resource, error) {
+	if isDatabase(kind) {
+		return a.listDatabases(ctx, ac, region, kind)
+	}
 	rows, e := a.instances(ctx, ac, region, kind, "")
 	if e != nil || kind == "sas" || len(rows) == 0 {
 		return rows, e

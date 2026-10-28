@@ -27,6 +27,11 @@ func (a *App) resource(c *gin.Context, permission string) (Resource, bool) {
 	return r, true
 }
 func (a *App) resources(c *gin.Context) {
+	category := c.Query("category")
+	if category != "" && category != "server" && category != "database" {
+		bad(c, "资源分类无效")
+		return
+	}
 	u := current(c)
 	if !Can(u, "resources.read", nil) {
 		fail(c, 403, "没有资源查看权限")
@@ -50,6 +55,9 @@ func (a *App) resources(c *gin.Context) {
 	filtered := make([]Resource, 0, len(rows))
 	q := strings.ToLower(strings.TrimSpace(c.Query("q")))
 	for _, r := range rows {
+		if (category == "server" && !isServer(r.Kind)) || (category == "database" && !isDatabase(r.Kind)) {
+			continue
+		}
 		if !Can(u, "resources.read", &r) {
 			continue
 		}
@@ -65,7 +73,14 @@ func (a *App) resources(c *gin.Context) {
 		if v := c.Query("state"); v != "" && v != r.State {
 			continue
 		}
-		if q != "" && !strings.Contains(strings.ToLower(r.InstanceID+" "+r.Name+" "+r.PublicIP+" "+r.PrivateIP), q) {
+		searchText := r.InstanceID + " " + r.Name + " " + r.PublicIP + " " + r.PrivateIP
+		if r.Database != nil {
+			searchText += " " + r.Database.Engine + " " + r.Database.Version
+			for _, ep := range r.Database.Endpoints {
+				searchText += " " + ep.Address
+			}
+		}
+		if q != "" && !strings.Contains(strings.ToLower(searchText), q) {
 			continue
 		}
 		r.AccountName = names[r.AccountID]
@@ -101,7 +116,7 @@ func (a *App) presentResource(u User, r *Resource) {
 	accountEnabled := a.DB.First(&account, r.AccountID).Error == nil && account.Enabled
 	var count int64
 	a.DB.Model(&Task{}).Where("resource_id = ? AND status IN ?", r.ID, []string{"queued", "submitting", "waiting", "unknown"}).Count(&count)
-	if count == 0 && accountEnabled {
+	if count == 0 && accountEnabled && isServer(r.Kind) {
 		for _, action := range []string{"start", "stop", "reboot", "force_stop", "force_reboot"} {
 			if Can(u, "instances."+action, r) && ((action == "start" && r.State == "STOPPED") || (action != "start" && r.State == "RUNNING")) {
 				r.AllowedActions = append(r.AllowedActions, action)
@@ -180,6 +195,10 @@ func (a *App) action(c *gin.Context) {
 	}
 	r, ok := a.resource(c, "instances."+in.Action)
 	if !ok {
+		return
+	}
+	if !isServer(r.Kind) {
+		bad(c, "该资源仅支持查看，不能执行服务器操作")
 		return
 	}
 	var account CloudAccount

@@ -227,7 +227,7 @@ func (a *App) saveRole(c *gin.Context) {
 			bad(c, "资源范围必须指定有效云账号")
 			return
 		}
-		if s.Kind != "" && !isServer(s.Kind) {
+		if s.Kind != "" && !isServer(s.Kind) && !isDatabase(s.Kind) {
 			bad(c, "资源类型无效")
 			return
 		}

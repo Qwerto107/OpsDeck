@@ -36,6 +36,14 @@ type Tencent struct{ Key cipher.AEAD }
 func (t *Tencent) Regions(ctx context.Context, ac CloudAccount, kind string) ([]string, error) {
 	service, version := "region", "2022-06-27"
 	params := map[string]any{"Product": "cvm"}
+	if isDatabase(kind) {
+		product, _ := tencentDatabaseProduct(kind)
+		params["Product"] = product
+	}
+	if kind == "postgresql" {
+		service, version = tencentDatabaseProduct(kind)
+		params = map[string]any{}
+	}
 	if kind == "lighthouse" {
 		service, version = cloudProduct(kind)
 		params = map[string]any{}
@@ -127,6 +135,9 @@ func ips(m map[string]any, k string) string {
 	return strings.Join(s, ", ")
 }
 func (t *Tencent) List(ctx context.Context, ac CloudAccount, region, kind string) ([]Resource, error) {
+	if isDatabase(kind) {
+		return t.listDatabases(ctx, ac, region, kind)
+	}
 	product, version := cloudProduct(kind)
 	rows := []Resource{}
 	for offset := 0; ; offset += 100 {
@@ -222,7 +233,7 @@ func (t *Tencent) State(ctx context.Context, ac CloudAccount, r Resource) (Cloud
 	return CloudState{str(m, "InstanceState"), str(m, "LatestOperationState"), str(m, "LatestOperationRequestId")}, nil
 }
 func (t *Tencent) Kinds(CloudAccount) []string {
-	return []string{"cvm", "lighthouse"}
+	return []string{"cvm", "lighthouse", "mysql", "postgresql"}
 }
 
 func (t *Tencent) MonitorBatch(ctx context.Context, ac CloudAccount, rows []Resource, enabled []string) map[string]map[string]Metric {
