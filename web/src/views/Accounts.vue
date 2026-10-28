@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { h, onMounted, reactive, ref } from "vue";
+import { computed, h, onMounted, reactive, ref } from "vue";
 import {
   NButton,
   NDataTable,
@@ -8,6 +8,7 @@ import {
   NForm,
   NFormItem,
   NInput,
+  NSelect,
   NSwitch,
   NAlert,
   NEmpty,
@@ -18,6 +19,7 @@ import type { DataTableColumns } from "naive-ui";
 import { Plus, Cloud, RefreshCw, Trash2 } from "lucide-vue-next";
 import { api } from "../api";
 import type { Account } from "../types";
+import { cloudLabel } from "../clouds";
 const rows = ref<Account[]>([]),
   busy = ref(false),
   modal = ref(false),
@@ -27,10 +29,28 @@ const rows = ref<Account[]>([]),
   dialog = useDialog(),
   editing = ref<number | null>(null);
 const form = reactive({
+  provider: "tencent",
+  site: "china",
   name: "",
   secret_id: "",
   secret_key: "",
   enabled: true,
+});
+const cloudOptions = [
+  { label: "腾讯云", value: "tencent:china" },
+  { label: "腾讯云国际站", value: "tencent:international" },
+  { label: "阿里云", value: "alibaba:china" },
+  { label: "阿里云国际站", value: "alibaba:international" },
+];
+const selectedCloud = computed({
+  get: () => `${form.provider}:${form.site}`,
+  set: (value: string) => {
+    const [provider, site] = value.split(":");
+    if (provider && site) {
+      form.provider = provider;
+      form.site = site;
+    }
+  },
 });
 async function load() {
   busy.value = true;
@@ -46,6 +66,8 @@ async function load() {
 function edit(row?: Account) {
   editing.value = row?.id ?? null;
   Object.assign(form, {
+    provider: row?.provider || "tencent",
+    site: row?.site || "china",
     name: row?.name || "",
     secret_id: "",
     secret_key: "",
@@ -105,13 +127,14 @@ const columns: DataTableColumns<Account> = [
     render: (r) =>
       h("div", [
         h("b", r.name),
-        h("div", { class: "subline" }, "腾讯云 · CVM / Lighthouse"),
+        h("div", { class: "subline" }, cloudLabel(r.provider, r.site)),
       ]),
   },
   {
     title: "地域范围",
     key: "regions",
-    render: (r) => (r.regions?.length ? r.regions.join("、") : "等待自动发现"),
+    render: (r) =>
+      r.regions?.length ? `已发现 ${r.regions.length} 个地域` : "等待自动发现",
   },
   {
     title: "状态",
@@ -162,7 +185,7 @@ onMounted(load);
   <div class="row spread" style="margin-bottom: 20px">
     <div>
       <h1 class="page-title">云账号</h1>
-      <p class="muted">集中管理腾讯云接入凭证，自动发现全部可用地域</p>
+      <p class="muted">集中管理云账号接入凭证，自动发现全部可用地域</p>
     </div>
     <div class="row">
       <n-button quaternary :loading="busy" aria-label="刷新云账号" @click="load"
@@ -184,8 +207,7 @@ onMounted(load);
         ><n-empty description="尚未接入云账号" style="padding: 40px"
           ><template #icon><Cloud :size="34" /></template
           ><template #extra
-            >接入腾讯云账号后，自动发现并同步全部可用地域的 CVM 和
-            Lighthouse。</template
+            >接入云账号后，自动发现并同步可用地域的云服务器和轻量应用服务器。</template
           ></n-empty
         ></template
       ></n-data-table
@@ -197,27 +219,36 @@ onMounted(load);
   <n-modal v-model:show="modal" :mask-closable="!saving"
     ><n-card
       style="width: 550px; max-width: 94vw"
-      :title="editing ? '编辑云账号' : '接入腾讯云账号'"
+      :title="editing ? '编辑云账号' : '接入云账号'"
       :bordered="false"
       role="dialog"
       aria-modal="true"
       ><n-form label-placement="top" @submit.prevent="save"
+        ><n-form-item label="云厂商"
+          ><n-select
+            v-model:value="selectedCloud"
+            :disabled="editing !== null"
+            :options="cloudOptions" /></n-form-item
         ><n-form-item label="账号名称"
           ><n-input
             v-model:value="form.name"
             placeholder="例如：生产主账号"
             maxlength="100" /></n-form-item
-        ><n-form-item label="Secret ID"
+        ><n-form-item
+          :label="form.provider === 'alibaba' ? 'AccessKey ID' : 'Secret ID'"
           ><n-input
             v-model:value="form.secret_id"
-            :placeholder="editing ? '留空保持原凭证' : '腾讯云 Secret ID'"
+            :placeholder="editing ? '留空保持原凭证' : '请输入云账号密钥 ID'"
             autocomplete="off" /></n-form-item
-        ><n-form-item label="Secret Key"
+        ><n-form-item
+          :label="
+            form.provider === 'alibaba' ? 'AccessKey Secret' : 'Secret Key'
+          "
           ><n-input
             v-model:value="form.secret_key"
             type="password"
             show-password-on="click"
-            :placeholder="editing ? '留空保持原凭证' : '腾讯云 Secret Key'"
+            :placeholder="editing ? '留空保持原凭证' : '请输入云账号密钥'"
             autocomplete="new-password"
         /></n-form-item>
         <p class="hint">

@@ -227,7 +227,7 @@ func (a *App) saveRole(c *gin.Context) {
 			bad(c, "资源范围必须指定有效云账号")
 			return
 		}
-		if s.Kind != "" && s.Kind != "cvm" && s.Kind != "lighthouse" {
+		if s.Kind != "" && !isServer(s.Kind) {
 			bad(c, "资源类型无效")
 			return
 		}
@@ -298,6 +298,8 @@ func (a *App) deleteRole(c *gin.Context) {
 }
 func (a *App) saveAccount(c *gin.Context) {
 	var in struct {
+		Provider  string `json:"provider"`
+		Site      string `json:"site"`
 		Name      string `json:"name"`
 		SecretID  string `json:"secret_id"`
 		SecretKey string `json:"secret_key"`
@@ -315,8 +317,29 @@ func (a *App) saveAccount(c *gin.Context) {
 		fail(c, 404, "云账号不存在")
 		return
 	}
+	if in.Provider == "" {
+		in.Provider = ac.Provider
+	}
+	if in.Provider == "" {
+		in.Provider = "tencent"
+	}
+	if in.Site == "" {
+		in.Site = ac.Site
+	}
+	if in.Site == "" {
+		in.Site = "china"
+	}
+	if (in.Provider != "tencent" && in.Provider != "alibaba") || (in.Site != "china" && in.Site != "international") {
+		bad(c, "云厂商或账号站点无效")
+		return
+	}
+	if ac.ID != 0 && (ac.Provider != in.Provider || ac.Site != in.Site) {
+		bad(c, "已有账号不能切换厂商或站点，请新建云账号")
+		return
+	}
 	ac.Name = in.Name
-	ac.Provider = "tencent"
+	ac.Provider = in.Provider
+	ac.Site = in.Site
 	if ac.Regions == nil {
 		ac.Regions = []string{}
 	}

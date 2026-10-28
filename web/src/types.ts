@@ -52,6 +52,7 @@ export interface Resource {
   allowed_actions: string[];
 }
 export interface Account {
+  site: string;
   id: number;
   name: string;
   provider: string;

@@ -84,7 +84,7 @@ func run() error {
 	if origin == "" {
 		origin = "http://localhost:5173"
 	}
-	a := &app.App{DB: db, Key: key, Origin: origin, Secure: !strings.HasPrefix(origin, "http://localhost:") && !strings.HasPrefix(origin, "http://127.0.0.1:"), Cloud: &app.Tencent{Key: key}}
+	a := &app.App{DB: db, Key: key, Origin: origin, Secure: !strings.HasPrefix(origin, "http://localhost:") && !strings.HasPrefix(origin, "http://127.0.0.1:"), Cloud: app.NewCloud(key)}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if command == "worker" {

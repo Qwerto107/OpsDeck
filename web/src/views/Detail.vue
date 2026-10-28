@@ -5,6 +5,7 @@ import { NButton, NAlert, NSkeleton, NEmpty, NTag } from "naive-ui";
 
 import type { Resource, Task, ResourceCache } from "../types";
 import { api } from "../api";
+import { kindLabel } from "../clouds";
 import { useResourceSync } from "../useResourceSync";
 import StatusBadge from "../components/StatusBadge.vue";
 import MetricValue from "../components/MetricValue.vue";
@@ -93,7 +94,7 @@ onMounted(() => void load());
             <status-badge
               :value="resource.operation_status || resource.state"
             /><n-tag size="small" :bordered="false">{{
-              resource.kind === "cvm" ? "CVM" : "Lighthouse"
+              kindLabel(resource.kind)
             }}</n-tag>
           </div>
           <div class="muted instance-meta">

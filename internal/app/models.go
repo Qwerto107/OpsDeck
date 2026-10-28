@@ -36,7 +36,8 @@ type Session struct {
 type CloudAccount struct {
 	ID        uint64     `json:"id"`
 	Name      string     `json:"name"`
-	Provider  string     `json:"provider"`
+	Provider  string     `json:"provider" gorm:"default:tencent"`
+	Site      string     `json:"site" gorm:"default:china"`
 	SecretID  string     `json:"-"`
 	SecretKey string     `json:"-"`
 	Regions   []string   `json:"regions" gorm:"serializer:json;type:jsonb"`
@@ -75,6 +76,11 @@ type Resource struct {
 	AllowedActions  []string          `json:"allowed_actions" gorm:"-"`
 	OperationStatus string            `json:"operation_status" gorm:"-"`
 }
+
+func isServer(kind string) bool {
+	return kind == "cvm" || kind == "lighthouse" || kind == "ecs" || kind == "sas"
+}
+
 type Audit struct {
 	ID        uint64    `json:"id"`
 	UserID    *uint64   `json:"user_id"`

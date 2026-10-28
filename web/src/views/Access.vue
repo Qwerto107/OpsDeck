@@ -21,6 +21,7 @@ import {
 import type { DataTableColumns } from "naive-ui";
 import { Plus, Trash2 } from "lucide-vue-next";
 import { api } from "../api";
+import { resourceKinds } from "../clouds";
 import { useSession } from "../store";
 import type { User, Role, Account, Scope, Identity, Provider } from "../types";
 const session = useSession(),
@@ -461,11 +462,7 @@ onMounted(load);
             aria-label="资源范围云账号"
           /><n-select
             v-model:value="scope.kind"
-            :options="[
-              { label: '全部类型', value: '' },
-              { label: 'CVM', value: 'cvm' },
-              { label: 'Lighthouse', value: 'lighthouse' },
-            ]"
+            :options="[{ label: '全部类型', value: '' }, ...resourceKinds]"
             aria-label="资源类型"
           /><n-input
             v-model:value="scope.region"

@@ -78,6 +78,9 @@ func (t *Tencent) call(ctx context.Context, ac CloudAccount, region, service, ve
 		return nil, &CloudError{Code: "CredentialDecryptFailed", Definite: true}
 	}
 	cp := profile.NewClientProfile()
+	if ac.Site == "international" {
+		cp.HttpProfile.Endpoint = service + ".intl.tencentcloudapi.com"
+	}
 	cp.HttpProfile.ReqTimeout = 15
 	cp.NetworkFailureMaxRetries = 0
 	cp.RateLimitExceededMaxRetries = 0
@@ -194,6 +197,9 @@ func OperationParameters(r Resource, action string) (string, map[string]any) {
 	return api, params
 }
 func (t *Tencent) Execute(ctx context.Context, ac CloudAccount, r Resource, action string) (string, error) {
+	if !isServer(r.Kind) {
+		return "", &CloudError{Code: "ReadOnlyResource", Definite: true}
+	}
 	service, version := cloudProduct(r.Kind)
 	api, params := OperationParameters(r, action)
 	body, e := t.call(ctx, ac, r.Region, service, version, api, params)
@@ -215,7 +221,9 @@ func (t *Tencent) State(ctx context.Context, ac CloudAccount, r Resource) (Cloud
 	m, _ := items[0].(map[string]any)
 	return CloudState{str(m, "InstanceState"), str(m, "LatestOperationState"), str(m, "LatestOperationRequestId")}, nil
 }
-func (t *Tencent) Kinds(CloudAccount) []string { return []string{"cvm", "lighthouse"} }
+func (t *Tencent) Kinds(CloudAccount) []string {
+	return []string{"cvm", "lighthouse"}
+}
 
 func (t *Tencent) MonitorBatch(ctx context.Context, ac CloudAccount, rows []Resource, enabled []string) map[string]map[string]Metric {
 	out := map[string]map[string]Metric{}

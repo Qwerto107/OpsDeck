@@ -28,6 +28,7 @@ import {
   GripVertical,
 } from "lucide-vue-next";
 import { api, query } from "../api";
+import { resourceKinds, kindLabel } from "../clouds";
 import { useResourceSync } from "../useResourceSync";
 import { useSession } from "../store";
 import type {
@@ -177,12 +178,7 @@ const columns = computed<DataTableColumns<Resource>>(() => {
       title: "类型",
       key: "kind",
       width: 100,
-      render: (r) =>
-        h(
-          "span",
-          { class: "resource-tag" },
-          r.kind === "cvm" ? "CVM" : "Lighthouse",
-        ),
+      render: (r) => h("span", { class: "resource-tag" }, kindLabel(r.kind)),
     },
     {
       title: "标签",
@@ -489,10 +485,7 @@ onUnmounted(() => {
         v-model:value="kind"
         class="filter"
         placeholder="类型：全部"
-        :options="[
-          { label: 'CVM', value: 'cvm' },
-          { label: 'Lighthouse', value: 'lighthouse' },
-        ]"
+        :options="[...resourceKinds]"
         clearable
         aria-label="类型筛选"
       /><n-select
