@@ -103,23 +103,24 @@ onMounted(() => void load());
         </div>
         <div class="row wrap instance-actions">
           <template v-for="[action, label] in actions" :key="action">
-          <n-button
-            v-if="
-              resource.allowed_actions?.includes(action) ||
-              resource.allowed_actions?.includes(
-                action === 'stop'
-                  ? 'force_stop'
-                  : action === 'reboot'
-                    ? 'force_reboot'
-                    : '',
-              )
-            "
-            @click="
-              selected = action;
-              modal = true;
-            "
-            >{{ label }}</n-button
-          ></template>
+            <n-button
+              v-if="
+                resource.allowed_actions?.includes(action) ||
+                resource.allowed_actions?.includes(
+                  action === 'stop'
+                    ? 'force_stop'
+                    : action === 'reboot'
+                      ? 'force_reboot'
+                      : '',
+                )
+              "
+              @click="
+                selected = action;
+                modal = true;
+              "
+              >{{ label }}</n-button
+            ></template
+          >
         </div>
       </section>
       <div class="instance-panels">
