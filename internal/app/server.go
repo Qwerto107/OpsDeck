@@ -50,6 +50,19 @@ func readJSON(c *gin.Context, dst any) bool {
 	return true
 }
 
+func queryValues(c *gin.Context, key string) []string {
+	values := []string{}
+	// 兼容旧单值、逗号分隔多值及重复查询参数；同一筛选项内按“或”匹配。
+	for _, raw := range c.QueryArray(key) {
+		for _, value := range strings.Split(raw, ",") {
+			if value = strings.TrimSpace(value); value != "" {
+				values = append(values, value)
+			}
+		}
+	}
+	return values
+}
+
 func (a *App) Router() *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()

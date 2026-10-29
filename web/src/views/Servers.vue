@@ -8,25 +8,28 @@ import {
   NDataTable,
   NPagination,
   NPopover,
-  NCheckbox,
   NAlert,
   NEmpty,
   NSkeleton,
   NDropdown,
   useMessage,
 } from "naive-ui";
-import type { DataTableColumns } from "naive-ui";
+import type { DataTableColumns, DataTableSortState } from "naive-ui";
 import {
   Search,
-  SlidersHorizontal,
   Plus,
   ArrowUp,
   ArrowDown,
   X,
   ChevronDown,
-  GripVertical,
 } from "lucide-vue-next";
 import { api, query } from "../api";
+import {
+  resourceSortFields,
+  resourceSortLabel,
+  resourceColumnSort,
+  updateResourceHeaderSort,
+} from "../resourceSorting";
 import { resourceKinds, kindLabel } from "../clouds";
 import { useResourceSync } from "../useResourceSync";
 import { useSession } from "../store";
@@ -41,6 +44,7 @@ import StatusBadge from "../components/StatusBadge.vue";
 import ResourceSyncControl from "../components/ResourceSyncControl.vue";
 import MetricValue from "../components/MetricValue.vue";
 import ActionModal from "../components/ActionModal.vue";
+import ResourceColumns from "../components/ResourceColumns.vue";
 const session = useSession(),
   message = useMessage(),
   rows = ref<Resource[]>([]),
@@ -50,10 +54,10 @@ const session = useSession(),
   loading = ref(true),
   error = ref(""),
   q = ref(""),
-  account = ref<number | null>(null),
-  kind = ref<string | null>(null),
-  region = ref<string | null>(null),
-  state = ref<string | null>(null),
+  account = ref<number[]>([]),
+  kind = ref<string[]>([]),
+  region = ref<string[]>([]),
+  state = ref<string[]>([]),
   page = ref(1),
   pageSize = ref(20),
   sorts = ref<SortRule[]>([{ field: "name", desc: false }]),
@@ -78,11 +82,7 @@ const actionShow = ref(false),
 let debounce: ReturnType<typeof setTimeout>,
   persist: ReturnType<typeof setTimeout>,
   request = 0;
-const fields = [
-    { label: "名称", value: "name" },
-    { label: "地域", value: "region" },
-    { label: "标签", value: "tag" },
-  ],
+const fields = resourceSortFields,
   directions = [
     { label: "升序", value: "asc" },
     { label: "降序", value: "desc" },
@@ -105,7 +105,6 @@ const columnLabels: Record<string, string> = {
   network: "网络 入 / 出",
 };
 const columnOrder = ref(Object.keys(columnLabels));
-const draggedColumn = ref<string | null>(null);
 const columnChoices = computed(() =>
   columnOrder.value
     .map((key) => [key, columnLabels[key]!] as [string, string])
@@ -121,7 +120,7 @@ const regionOptions = computed(() =>
   [
     ...new Set(
       accounts.value
-        .filter((a) => account.value == null || a.id === account.value)
+        .filter((a) => !account.value.length || account.value.includes(a.id))
         .flatMap((a) => a.regions || []),
     ),
   ].map((r) => ({
@@ -313,7 +312,13 @@ const columns = computed<DataTableColumns<Resource>>(() => {
       .filter(([key]) => visible.value.includes(key))
       .map(([key]) => byKey.get(key)!),
     byKey.get("actions")!,
-  ];
+  ].map((column) => ({
+    ...column,
+    ...resourceColumnSort(
+      String("key" in column ? column.key : ""),
+      sorts.value,
+    ),
+  }));
 });
 async function load(silent = false) {
   const seq = ++request;
@@ -325,10 +330,10 @@ async function load(silent = false) {
         query({
           category: "server",
           q: q.value,
-          account_id: account.value,
-          kind: kind.value,
-          region: region.value,
-          state: state.value,
+          account_id: account.value.join(","),
+          kind: kind.value.join(","),
+          region: region.value.join(","),
+          state: state.value.join(","),
           page: page.value,
           page_size: pageSize.value,
           sort: JSON.stringify(sorts.value),
@@ -360,8 +365,18 @@ function filterChanged() {
   clearTimeout(debounce);
   debounce = setTimeout(() => load(), 250);
 }
-watch([q, account, kind, region, state], filterChanged);
+watch([q, account, kind, region, state], filterChanged, { deep: true });
 watch([page, pageSize], () => load());
+function updateHeaderSort(
+  state: DataTableSortState | DataTableSortState[] | null,
+) {
+  const next = updateResourceHeaderSort(sorts.value, state);
+  if (next.length > 8) {
+    message.warning("最多设置 8 个排序条件，请先移除一个条件");
+    return;
+  }
+  sorts.value = next;
+}
 function validSorts() {
   return (
     sorts.value.every((r) => r.field !== "tag" || r.key?.trim()) &&
@@ -411,33 +426,6 @@ function move(i: number, delta: number) {
   [copy[i], copy[to]] = [copy[to]!, copy[i]!];
   sorts.value = copy;
 }
-function moveColumn(key: string, target: string) {
-  const from = columnOrder.value.indexOf(key);
-  const to = columnOrder.value.indexOf(target);
-  if (from < 0 || to < 0 || from === to) return;
-  const copy = [...columnOrder.value];
-  copy.splice(from, 1);
-  copy.splice(to, 0, key);
-  columnOrder.value = copy;
-}
-function dropColumn(target: string) {
-  if (draggedColumn.value) moveColumn(draggedColumn.value, target);
-  draggedColumn.value = null;
-}
-function nudgeColumn(key: string, delta: number) {
-  const index = columnChoices.value.findIndex(([k]) => k === key);
-  const target = columnChoices.value[index + delta];
-  if (target) moveColumn(key, target[0]);
-}
-function resetColumns() {
-  columnOrder.value = Object.keys(columnLabels);
-  visible.value = columnChoices.value.map(([key]) => key);
-}
-function toggleColumn(key: string, value: boolean) {
-  visible.value = value
-    ? [...visible.value, key]
-    : visible.value.filter((k) => k !== key);
-}
 onMounted(async () => {
   const p = session.user?.preferences;
   if (Array.isArray(p?.sorts)) sorts.value = p.sorts as SortRule[];
@@ -480,6 +468,8 @@ onUnmounted(() => {
         ><template #prefix><Search :size="15" /></template></n-input
       ><n-select
         v-model:value="account"
+        multiple
+        max-tag-count="responsive"
         class="filter"
         placeholder="云账号：全部"
         :options="accounts.map((a) => ({ label: a.name, value: a.id }))"
@@ -487,6 +477,8 @@ onUnmounted(() => {
         aria-label="云账号筛选"
       /><n-select
         v-model:value="kind"
+        multiple
+        max-tag-count="responsive"
         class="filter"
         placeholder="类型：全部"
         :options="[...resourceKinds]"
@@ -494,6 +486,8 @@ onUnmounted(() => {
         aria-label="类型筛选"
       /><n-select
         v-model:value="region"
+        multiple
+        max-tag-count="responsive"
         class="filter"
         placeholder="地域：全部"
         :options="regionOptions"
@@ -502,70 +496,28 @@ onUnmounted(() => {
         aria-label="地域筛选"
       /><n-select
         v-model:value="state"
+        multiple
+        max-tag-count="responsive"
         class="filter"
         placeholder="状态：全部"
         :options="statusOptions"
         clearable
         aria-label="状态筛选"
       />
-      <n-popover trigger="click" placement="bottom-end"
-        ><template #trigger
-          ><n-button class="push"
-            ><SlidersHorizontal
-              :size="14"
-              style="margin-right: 6px"
-            />列设置</n-button
-          ></template
-        >
-        <div class="columns-panel">
-          <h3>列设置</h3>
-          <p class="hint">
-            拖动调整顺序，也可聚焦拖动柄后按上下键。仅展示已开启的指标。
-          </p>
-          <label><n-checkbox checked disabled>实例（固定）</n-checkbox></label>
-          <div
-            v-for="[key, label] in columnChoices"
-            :key="key"
-            class="column-option"
-            :class="{ dragging: draggedColumn === key }"
-            @dragover.prevent
-            @drop.prevent="dropColumn(key)"
-          >
-            <button
-              type="button"
-              class="column-drag-handle"
-              draggable="true"
-              :aria-label="'调整' + label + '列顺序'"
-              @dragstart="draggedColumn = key"
-              @dragend="draggedColumn = null"
-              @keydown.up.prevent="nudgeColumn(key, -1)"
-              @keydown.down.prevent="nudgeColumn(key, 1)"
-            >
-              <GripVertical :size="15" />
-            </button>
-            <n-checkbox
-              :checked="visible.includes(key)"
-              @update:checked="(v) => toggleColumn(key, v)"
-              >{{ label }}</n-checkbox
-            >
-          </div>
-          <label><n-checkbox checked disabled>操作（固定）</n-checkbox></label
-          ><n-button text type="primary" @click="resetColumns"
-            >恢复默认</n-button
-          ><span class="muted small" style="float: right">自动保存</span>
-        </div></n-popover
-      >
+      <ResourceColumns
+        v-model:visible="visible"
+        v-model:order="columnOrder"
+        :choices="columnChoices"
+        :default-order="Object.keys(columnLabels)"
+        last-label="操作"
+        hint="仅展示已开启的指标。"
+      />
     </div>
     <div class="sortbar">
       <span class="muted small">排序</span
       ><span v-for="(r, i) in sorts" :key="i" class="sort-chip"
         ><small>{{ i + 1 }}</small
-        >{{
-          r.field === "tag"
-            ? "标签 " + r.key
-            : r.field === "region"
-              ? "地域"
-              : "名称"
+        >{{ resourceSortLabel(r)
         }}<component :is="r.desc ? ArrowDown : ArrowUp" :size="12" /></span
       ><n-popover
         v-model:show="sortOpen"
@@ -579,7 +531,7 @@ onUnmounted(() => {
         <div class="sort-editor">
           <h3>多字段排序</h3>
           <p class="hint" style="margin-bottom: 16px">
-            按优先级依次比较，缺失值始终排在末尾。
+            按优先级依次比较，缺失值始终排在末尾。点击表头可切换排序并将该字段置于首位。
           </p>
           <div v-for="(r, i) in sorts" :key="i" class="sort-row">
             <span class="muted">{{ i + 1 }}</span
@@ -668,6 +620,8 @@ onUnmounted(() => {
     </div>
     <n-data-table
       v-else
+      remote
+      @update:sorter="updateHeaderSort"
       :columns="columns"
       :data="rows"
       :row-key="(r) => r.id"
@@ -711,31 +665,3 @@ onUnmounted(() => {
     @done="load(true)"
   />
 </template>
-
-<style scoped>
-.column-option {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 0;
-  border-radius: 4px;
-}
-.column-option.dragging {
-  background: #eef2ff;
-}
-.column-drag-handle {
-  display: inline-flex;
-  align-items: center;
-  padding: 3px;
-  color: #667085;
-  background: transparent;
-  border: 0;
-  cursor: grab;
-}
-.column-drag-handle:active {
-  cursor: grabbing;
-}
-.columns-panel .hint {
-  max-width: 240px;
-}
-</style>

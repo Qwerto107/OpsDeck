@@ -26,7 +26,7 @@ func ParseSort(raw string) ([]SortRule, error) {
 	}
 	seen := map[string]bool{}
 	for _, r := range rules {
-		if r.Field != "name" && r.Field != "region" && r.Field != "tag" {
+		if r.Field != "name" && r.Field != "region" && r.Field != "tag" && r.Field != "cpu" && r.Field != "memory" && r.Field != "disk" {
 			return nil, fmt.Errorf("无效排序字段")
 		}
 		key := r.Field
@@ -48,6 +48,7 @@ func SortResources(rows []Resource, rules []SortRule) {
 		a, b := rows[i], rows[j]
 		for _, r := range rules {
 			var x, y string
+			var comparison int
 			switch r.Field {
 			case "name":
 				x, y = a.Name, b.Name
@@ -55,6 +56,18 @@ func SortResources(rows []Resource, rules []SortRule) {
 				x, y = a.Region, b.Region
 			case "tag":
 				x, y = a.Tags[r.Key], b.Tags[r.Key]
+			case "cpu", "memory", "disk":
+				// 使用已授权、可展示的监控使用率，不能改用实例配置或泄露被隐藏的指标。
+				left, right := a.Metrics[r.Field].Value, b.Metrics[r.Field].Value
+				if left == nil && right != nil {
+					return false
+				}
+				if right == nil && left != nil {
+					return true
+				}
+				if left != nil && right != nil {
+					comparison = cmp.Compare(*left, *right)
+				}
 			}
 			// 空值始终置后，不能随降序反转。
 			if x == "" && y != "" {
@@ -63,11 +76,14 @@ func SortResources(rows []Resource, rules []SortRule) {
 			if y == "" && x != "" {
 				return true
 			}
-			if c := strings.Compare(x, y); c != 0 {
+			if comparison == 0 {
+				comparison = strings.Compare(x, y)
+			}
+			if comparison != 0 {
 				if r.Desc {
-					return c > 0
+					return comparison > 0
 				}
-				return c < 0
+				return comparison < 0
 			}
 		}
 		if c := cmp.Compare(a.AccountID, b.AccountID); c != 0 {

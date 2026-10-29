@@ -10,12 +10,24 @@ import {
   NPagination,
   NPopover,
   NSelect,
+  useMessage,
 } from "naive-ui";
-import type { DataTableColumns } from "naive-ui";
+import type {
+  DataTableBaseColumn,
+  DataTableColumns,
+  DataTableSortState,
+} from "naive-ui";
 import { Search, Plus, X, ArrowUp, ArrowDown } from "lucide-vue-next";
 import { api, query } from "../api";
+import {
+  resourceSortFields,
+  resourceSortLabel,
+  resourceColumnSort,
+  updateResourceHeaderSort,
+} from "../resourceSorting";
 import { databaseKinds, databaseMetrics } from "../clouds";
 import { useResourceSync } from "../useResourceSync";
+import { useSession } from "../store";
 import type {
   Account,
   Page,
@@ -26,7 +38,10 @@ import type {
 import StatusBadge from "../components/StatusBadge.vue";
 import ResourceSyncControl from "../components/ResourceSyncControl.vue";
 import MetricValue from "../components/MetricValue.vue";
+import ResourceColumns from "../components/ResourceColumns.vue";
 
+const message = useMessage(),
+  session = useSession();
 const rows = ref<Resource[]>([]),
   accounts = ref<Account[]>([]),
   cache = ref<ResourceCache>(),
@@ -34,18 +49,14 @@ const rows = ref<Resource[]>([]),
   loading = ref(false),
   error = ref("");
 const q = ref(""),
-  account = ref<number | null>(null),
-  kind = ref<string | null>(null),
-  region = ref<string | null>(null),
-  state = ref<string | null>(null),
+  account = ref<number[]>([]),
+  kind = ref<string[]>([]),
+  region = ref<string[]>([]),
+  state = ref<string[]>([]),
   page = ref(1),
   pageSize = ref(20);
 const sorts = ref<SortRule[]>([{ field: "name", desc: false }]);
-const fields = [
-  { label: "名称", value: "name" },
-  { label: "地域", value: "region" },
-  { label: "标签", value: "tag" },
-];
+const fields = resourceSortFields;
 const directions = [
   { label: "升序", value: "asc" },
   { label: "降序", value: "desc" },
@@ -54,7 +65,7 @@ const regions = computed(() =>
   [
     ...new Set(
       accounts.value
-        .filter((a) => account.value === null || a.id === account.value)
+        .filter((a) => !account.value.length || account.value.includes(a.id))
         .flatMap((a) => a.regions || []),
     ),
   ].map((value) => ({ label: value, value })),
@@ -68,7 +79,18 @@ const states = [
   { label: "云端不存在", value: "NOT_FOUND" },
 ];
 let sequence = 0,
-  timer: ReturnType<typeof setTimeout>;
+  timer: ReturnType<typeof setTimeout>,
+  persist: ReturnType<typeof setTimeout>;
+function updateHeaderSort(
+  state: DataTableSortState | DataTableSortState[] | null,
+) {
+  const next = updateResourceHeaderSort(sorts.value, state);
+  if (next.length > 8) {
+    message.warning("最多设置 8 个排序条件，请先移除一个条件");
+    return;
+  }
+  sorts.value = next;
+}
 function validSorts() {
   return (
     sorts.value.every((r) => r.field !== "tag" || r.key?.trim()) &&
@@ -88,10 +110,10 @@ async function load() {
         query({
           category: "database",
           q: q.value,
-          account_id: account.value,
-          kind: kind.value,
-          region: region.value,
-          state: state.value,
+          account_id: account.value.join(","),
+          kind: kind.value.join(","),
+          region: region.value.join(","),
+          state: state.value.join(","),
           page: page.value,
           page_size: pageSize.value,
           sort: JSON.stringify(sorts.value),
@@ -122,7 +144,7 @@ function moveSort(index: number, delta: number) {
   const [rule] = sorts.value.splice(index, 1);
   if (rule) sorts.value.splice(to, 0, rule);
 }
-const columns: DataTableColumns<Resource> = [
+const baseColumns: DataTableBaseColumn<Resource>[] = [
   {
     title: "实例",
     key: "name",
@@ -224,6 +246,59 @@ const columns: DataTableColumns<Resource> = [
     render: (r) => h(RouterLink, { to: "/databases/" + r.id }, () => "查看"),
   },
 ];
+const configurableColumns = baseColumns.filter(
+  (column) => column.key !== "name" && column.key !== "detail",
+);
+const columnLabels = Object.fromEntries(
+  configurableColumns.map((column) => [
+    String(column.key),
+    String(column.title),
+  ]),
+);
+const defaultOrder = Object.keys(columnLabels),
+  columnOrder = ref([...defaultOrder]),
+  visible = ref([...defaultOrder]),
+  prefReady = ref(false);
+const columnChoices = computed(() =>
+  columnOrder.value.map((key) => [key, columnLabels[key]!] as [string, string]),
+);
+const columns = computed<DataTableColumns<Resource>>(() => {
+  const byKey = new Map(
+    baseColumns.map((column) => [String(column.key), column]),
+  );
+  return [
+    byKey.get("name")!,
+    ...columnChoices.value
+      .filter(([key]) => visible.value.includes(key))
+      .map(([key]) => byKey.get(key)!),
+    byKey.get("detail")!,
+  ].map((column) => ({
+    ...column,
+    ...resourceColumnSort(
+      String("key" in column ? column.key : ""),
+      sorts.value,
+    ),
+  }));
+});
+async function saveColumns() {
+  try {
+    await session.preferences({
+      database_columns: visible.value,
+      database_column_order: columnOrder.value,
+    });
+  } catch (e) {
+    message.error((e as Error).message);
+  }
+}
+watch(
+  [visible, columnOrder],
+  () => {
+    if (!prefReady.value) return;
+    clearTimeout(persist);
+    persist = setTimeout(saveColumns, 500);
+  },
+  { deep: true },
+);
 watch(
   [q, account, kind, region, state, sorts],
   () => {
@@ -238,6 +313,22 @@ watch([page, pageSize], () => {
   timer = setTimeout(() => void load(), 0);
 });
 onMounted(async () => {
+  const p = session.user?.preferences;
+  if (Array.isArray(p?.database_columns))
+    visible.value = p.database_columns as string[];
+  if (Array.isArray(p?.database_column_order)) {
+    // 忽略失效项，并补齐新增列；数据库与服务器分别保存列偏好。
+    columnOrder.value = [
+      ...new Set([
+        ...p.database_column_order.filter(
+          (key): key is string =>
+            typeof key === "string" && Object.hasOwn(columnLabels, key),
+        ),
+        ...defaultOrder,
+      ]),
+    ];
+  }
+  prefReady.value = true;
   await load();
   try {
     accounts.value = await api<Account[]>("/accounts");
@@ -248,6 +339,7 @@ onMounted(async () => {
 onUnmounted(() => {
   sequence++;
   clearTimeout(timer);
+  clearTimeout(persist);
 });
 </script>
 <template>
@@ -262,6 +354,8 @@ onUnmounted(() => {
         ><template #prefix><Search :size="15" /></template></n-input
       ><n-select
         v-model:value="account"
+        multiple
+        max-tag-count="responsive"
         class="filter"
         :options="accounts.map((a) => ({ label: a.name, value: a.id }))"
         placeholder="云账号：全部"
@@ -269,6 +363,8 @@ onUnmounted(() => {
         aria-label="数据库云账号筛选"
       /><n-select
         v-model:value="kind"
+        multiple
+        max-tag-count="responsive"
         class="filter"
         :options="databaseKinds"
         placeholder="引擎：全部"
@@ -276,6 +372,8 @@ onUnmounted(() => {
         aria-label="数据库引擎筛选"
       /><n-select
         v-model:value="region"
+        multiple
+        max-tag-count="responsive"
         class="filter"
         :options="regions"
         placeholder="地域：全部"
@@ -284,23 +382,27 @@ onUnmounted(() => {
         aria-label="数据库地域筛选"
       /><n-select
         v-model:value="state"
+        multiple
+        max-tag-count="responsive"
         class="filter"
         :options="states"
         placeholder="状态：全部"
         clearable
         aria-label="数据库状态筛选"
       />
+      <ResourceColumns
+        v-model:visible="visible"
+        v-model:order="columnOrder"
+        :choices="columnChoices"
+        :default-order="defaultOrder"
+        last-label="详情"
+      />
     </div>
     <div class="sortbar">
       <span class="muted small">排序</span
       ><span v-for="(r, i) in sorts" :key="i" class="sort-chip"
         ><small>{{ i + 1 }}</small
-        >{{
-          r.field === "tag"
-            ? "标签 " + r.key
-            : r.field === "region"
-              ? "地域"
-              : "名称"
+        >{{ resourceSortLabel(r)
         }}<component :is="r.desc ? ArrowDown : ArrowUp" :size="12" /></span
       ><n-popover trigger="click" placement="bottom-start"
         ><template #trigger
@@ -311,7 +413,7 @@ onUnmounted(() => {
         <div class="sort-editor">
           <h3>多字段排序</h3>
           <p class="hint" style="margin-bottom: 16px">
-            按优先级依次比较，缺失值始终排在末尾。
+            按优先级依次比较，缺失值始终排在末尾。点击表头可切换排序并将该字段置于首位。
           </p>
           <div v-for="(r, i) in sorts" :key="i" class="sort-row">
             <span class="muted">{{ i + 1 }}</span
@@ -380,6 +482,8 @@ onUnmounted(() => {
   <n-alert v-if="error" type="error" class="error-banner">{{ error }}</n-alert>
   <div class="panel flush">
     <n-data-table
+      remote
+      @update:sorter="updateHeaderSort"
       :columns="columns"
       :data="rows"
       :loading="loading"

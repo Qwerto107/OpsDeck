@@ -1,6 +1,7 @@
 package app
 
 import (
+	"slices"
 	"time"
 )
 
@@ -33,14 +34,14 @@ func (a *App) monitorSample(cache *resourceCache, rows []Resource) error {
 }
 
 // 过期快照继续可读；只有用户明确刷新才回源，避免重载页面触发云请求。
-func (a *App) resourceCache(u User, accounts []CloudAccount, selected uint64) (resourceCache, error) {
+func (a *App) resourceCache(u User, accounts []CloudAccount, selected ...uint64) (resourceCache, error) {
 	cache := resourceCache{TTLSeconds: 180}
 	ids := []uint64{}
 	for _, ac := range accounts {
-		if selected == 0 && !ac.Enabled {
+		if len(selected) == 0 && !ac.Enabled {
 			continue
 		}
-		if (selected == 0 || selected == ac.ID) && canRefreshAccount(u, ac.ID) {
+		if (len(selected) == 0 || slices.Contains(selected, ac.ID)) && canRefreshAccount(u, ac.ID) {
 			ids = append(ids, ac.ID)
 		}
 	}

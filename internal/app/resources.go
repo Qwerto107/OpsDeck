@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -54,6 +55,17 @@ func (a *App) resources(c *gin.Context) {
 	}
 	filtered := make([]Resource, 0, len(rows))
 	q := strings.ToLower(strings.TrimSpace(c.Query("q")))
+	accountFilter := queryValues(c, "account_id")
+	kindFilter, regionFilter, stateFilter := queryValues(c, "kind"), queryValues(c, "region"), queryValues(c, "state")
+	selected := make([]uint64, 0, len(accountFilter))
+	for _, value := range accountFilter {
+		id, err := strconv.ParseUint(value, 10, 64)
+		if err != nil || id == 0 {
+			bad(c, "云账号筛选编号无效")
+			return
+		}
+		selected = append(selected, id)
+	}
 	for _, r := range rows {
 		if (category == "server" && !isServer(r.Kind)) || (category == "database" && !isDatabase(r.Kind)) {
 			continue
@@ -61,16 +73,16 @@ func (a *App) resources(c *gin.Context) {
 		if !Can(u, "resources.read", &r) {
 			continue
 		}
-		if v := c.Query("account_id"); v != "" && v != fmt.Sprint(r.AccountID) {
+		if len(selected) > 0 && !slices.Contains(selected, r.AccountID) {
 			continue
 		}
-		if v := c.Query("kind"); v != "" && v != r.Kind {
+		if len(kindFilter) > 0 && !slices.Contains(kindFilter, r.Kind) {
 			continue
 		}
-		if v := c.Query("region"); v != "" && v != r.Region {
+		if len(regionFilter) > 0 && !slices.Contains(regionFilter, r.Region) {
 			continue
 		}
-		if v := c.Query("state"); v != "" && v != r.State {
+		if len(stateFilter) > 0 && !slices.Contains(stateFilter, r.State) {
 			continue
 		}
 		searchText := r.InstanceID + " " + r.Name + " " + r.PublicIP + " " + r.PrivateIP
@@ -102,8 +114,7 @@ func (a *App) resources(c *gin.Context) {
 		start = (page - 1) * size
 	}
 	end := min(start+size, total)
-	selected, _ := strconv.ParseUint(c.Query("account_id"), 10, 64)
-	cache, err := a.resourceCache(u, accounts, selected)
+	cache, err := a.resourceCache(u, accounts, selected...)
 	if err != nil {
 		fail(c, 503, "无法读取缓存更新时间")
 		return
@@ -114,6 +125,7 @@ func (a *App) resources(c *gin.Context) {
 	}
 	c.JSON(200, gin.H{"items": filtered[start:end], "total": total, "page": page, "page_size": size, "cache": cache})
 }
+
 func (a *App) presentResource(u User, r *Resource) {
 	r.AllowedActions = []string{}
 	var account CloudAccount

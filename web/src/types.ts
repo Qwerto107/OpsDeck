@@ -78,7 +78,7 @@ export interface Settings {
   metrics: string[];
 }
 export interface SortRule {
-  field: "name" | "region" | "tag";
+  field: "name" | "region" | "tag" | "cpu" | "memory" | "disk";
   key?: string;
   desc: boolean;
 }
