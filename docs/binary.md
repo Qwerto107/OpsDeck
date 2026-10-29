@@ -68,4 +68,4 @@ $env:INIT_PASSWORD_FILE='./secrets/admin-password'
 
 云权限见 [腾讯云 CAM](https://github.com/Qwerto107/OpsDeck/blob/main/docs/tencent-cam.md) 和 [阿里云 RAM](https://github.com/Qwerto107/OpsDeck/blob/main/docs/alibaba-ram.md)。新增云账号后发现地域并首次同步，后续点击“更新”同步数据。
 
-页面进入、重载和 3 分钟缓存过期不触发云请求。Worker 继续执行已入队任务和结果核对，不定时同步资源。数据库仅展示 MySQL、PostgreSQL，不提供操作或专属监控。
+页面进入、重载和监控过期提示不触发云请求。过期提示默认 10 分钟，可在系统设置调整；列表刷新当前页，详情刷新单台。Worker 继续执行已入队任务和结果核对，不定时同步资源。数据库仅展示 MySQL、PostgreSQL 当前资源监控，不提供操作。

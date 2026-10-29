@@ -8,9 +8,9 @@
 
 列表显示实例 ID、名称、引擎和版本、所属账号、地域、状态、规格、存储容量、连接地址和标签。支持搜索、筛选和按名称、地域、标签设置多字段排序。详情显示基础配置和公网、内网连接地址。
 
-页面进入和重载只读取快照。点击“更新”后复用对应账号的同步任务，完成后读取新快照，缓存有效期为 3 分钟。账号同步同时查询服务器和数据库。已有云账号需要补充以下查询权限，再手动更新。
+页面进入和重载只读取快照。列表刷新当前页，详情刷新单台，采样偏旧提示默认 10 分钟。刷新中保留旧数据并显示耗时，失败项可查看原因并单独重试。新增资源仍由云账号同步发现；已有云账号需补充以下查询权限。
 
-平台不连接数据库、不获取数据库密码。数据库资源没有开关机、重启、配置变更或专属监控功能。API、Worker 和云适配层均拒绝将数据库当作服务器执行操作。
+平台不连接数据库、不获取数据库密码。列表和详情显示 CPU、内存、存储空间使用率与当前连接数。数据库资源没有开关机、重启或配置变更功能。API、Worker 和云适配层均拒绝将数据库当作服务器执行操作。
 
 ## 云端权限
 
@@ -20,7 +20,8 @@
 [
   "cdb:DescribeDBInstances",
   "postgres:DescribeRegions",
-  "postgres:DescribeDBInstances"
+  "postgres:DescribeDBInstances",
+  "monitor:GetMonitorData"
 ]
 ```
 
@@ -34,11 +35,25 @@ MySQL 地域查询复用已有 `region:DescribeRegions`，参数为 `Product=cdb
   "rds:DescribeDBInstances",
   "rds:DescribeDBInstanceAttribute",
   "rds:DescribeDBInstanceNetInfo",
-  "rds:DescribeTags"
+  "rds:DescribeTags",
+  "rds:DescribeDBInstancePerformance"
 ]
 ```
 
-这些权限仅用于读取配置和标签，不包含数据库操作权限。平台仍按同一角色内的 `resources.read` 和云账号、资源类型、地域、实例范围授权。资源类型选择 MySQL 或 PostgreSQL；已有“全部类型”范围也覆盖新增数据库类型。
+这些权限仅用于读取配置、标签和监控，不包含数据库操作权限。指标还要求平台同一角色中的 monitor.read 与资源范围授权。平台仍按同一角色内的 `resources.read` 和云账号、资源类型、地域、实例范围授权。资源类型选择 MySQL 或 PostgreSQL；已有“全部类型”范围也覆盖新增数据库类型。
+
+## 当前资源监控
+
+| 产品                  | CPU / 内存 / 存储空间 / 连接数                                | 数据源                                                    |
+| --------------------- | ------------------------------------------------------------- | --------------------------------------------------------- |
+| 腾讯云 MySQL          | CpuUseRate / MemoryUseRate / VolumeRate / ThreadsConnected    | QCE/CDB，InstanceId 维度；云盘集群使用 Cluster 前缀       |
+| 腾讯云 PostgreSQL     | Cpu / MemoryRate / StorageRate / Connections                  | QCE/POSTGRES，resourceId 维度                             |
+| 阿里云 RDS MySQL      | MySQL_MemCpuUsage / MySQL_DetailedSpaceUsage / MySQL_Sessions | DescribeDBInstancePerformance，单次合并同一实例的多项指标 |
+| 阿里云 RDS PostgreSQL | CpuUsage / MemoryUsage / PgSQL_SpaceUsage / PgSQL_Session     | DescribeDBInstancePerformance，单次合并同一实例的多项指标 |
+
+百分比指标与连接数分别显示单位和采样时间。阿里云空间使用率由云端已用空间除以实例配置容量计算，未知容量或单位显示不可用，不把存储容量本身当作使用率。腾讯云按产品及地域批量查询，阿里云性能接口不支持跨实例批量查询。
+
+只保存最新快照。超过 5 分钟的采样标记过期，查询失败或无采样明确显示原因，不显示为零。页面进入、重载及缓存过期不触发同步；点击同步更新后才重新获取。国内站及国际站复用相同业务流程，不安装 Agent，不提供历史趋势。
 
 ## 数据与边界
 

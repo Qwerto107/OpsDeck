@@ -6,7 +6,7 @@
 
 在云账号页面选择“阿里云”或“阿里云国际站”。国内站、国际站分别创建账号记录，使用对应 RAM 用户的 AccessKey ID 和 AccessKey Secret。平台加密保存凭证，编辑时留空表示保留原密钥。
 
-适配器查询 ECS、轻量应用服务器和 RDS MySQL、PostgreSQL，按云端返回的地域同步资源。数据库仅展示配置和连接信息，见 [数据库资源展示](database-resources.md)。站点用于账号标识和初始地域选择，不按地域名称推断账号站点。阿里云两站使用相同产品 API 协议和区域端点，权限仍由实际凭证决定。
+适配器查询 ECS、轻量应用服务器和 RDS MySQL、PostgreSQL，按云端返回的地域同步资源。数据库只读展示配置、连接信息和当前资源监控，见 [数据库资源展示](database-resources.md)。站点用于账号标识和初始地域选择，不按地域名称推断账号站点。阿里云两站使用相同产品 API 协议和区域端点，权限仍由实际凭证决定。
 
 已有账号不能切换厂商或站点，避免旧资源和权限范围关联到另一云账号。需要变更时新建账号记录。
 
@@ -29,6 +29,7 @@
         "rds:DescribeDBInstanceAttribute",
         "rds:DescribeDBInstanceNetInfo",
         "rds:DescribeTags",
+        "rds:DescribeDBInstancePerformance",
         "swas-open:ListInstances",
         "cms:QueryMetricList",
         "cms:DescribeMetricMetaList"

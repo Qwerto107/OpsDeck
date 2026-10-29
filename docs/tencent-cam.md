@@ -22,7 +22,7 @@
 | PostgreSQL 资源展示                 | `postgres:DescribeDBInstances` | 只读取配置、连接信息和标签                             |
 | CVM 列表、详情和操作结果核对        | `cvm:DescribeInstances`        | 同时读取实例配置、IP、状态及返回的标签                 |
 | Lighthouse 列表、详情和操作结果核对 | `lighthouse:DescribeInstances` | 同时读取实例配置、IP、状态及返回的标签                 |
-| 两类实例的监控                      | `monitor:GetMonitorData`       | 查询 CPU、内存、磁盘空间和网络指标                     |
+| 服务器和数据库监控                  | `monitor:GetMonitorData`       | 查询 CPU、内存、磁盘空间和网络指标                     |
 | CVM 启动                            | `cvm:StartInstances`           | 单台操作                                               |
 | CVM 正常、强制关机                  | `cvm:StopInstances`            | 通过 `StopType` 区分                                   |
 | CVM 正常、强制重启                  | `cvm:RebootInstances`          | 通过 `StopType` 区分                                   |
