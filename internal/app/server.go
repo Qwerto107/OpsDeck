@@ -63,13 +63,18 @@ func (a *App) Router() *gin.Engine {
 		}()
 		c.Next()
 	})
-	settings, err := a.settings()
-	if err != nil {
-		panic("无法读取服务设置")
+	var settings Settings
+	// 静态资源路由允许不注入数据库；正常服务仍须成功读取数据库设置。
+	if a.DB != nil {
+		var err error
+		settings, err = a.settings()
+		if err != nil {
+			panic("无法读取服务设置")
+		}
 	}
 	a.runtimeMu.Lock()
 	a.router, a.runtimeURL = r, settings.AppURL
-	err = r.SetTrustedProxies(settings.TrustedProxies)
+	err := r.SetTrustedProxies(settings.TrustedProxies)
 	a.runtimeMu.Unlock()
 	if err != nil {
 		panic("可信代理配置无效")
