@@ -3,10 +3,67 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"net/url"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestPostgresAuditMultiFilters(t *testing.T) {
+	a, admin := integrationApp(t)
+	rows := []Audit{
+		{Actor: "alice", Action: "instances.stop", Result: "accepted"},
+		{Actor: "bob", Action: "instances.reboot", Result: "accepted"},
+		{Actor: "alice", Action: "instances.reboot", Result: "denied"},
+		{Actor: "carol", Action: "instances.stop", Result: "success"},
+		{Actor: "bob", Action: "auth.login", Result: "success"},
+		{Actor: "alice", Action: "accounts.sync", Result: "success"},
+	}
+	for i := range rows {
+		rows[i].TargetLabel = "多选筛选目标"
+		if err := a.DB.Create(&rows[i]).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i, status := range []string{"failed", "succeeded"} {
+		task := Task{AuditID: &rows[i].ID, Action: "reboot", Status: status, NextRun: time.Now()}
+		if err := a.DB.Create(&task).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	cookie, _ := loginTest(t, a, admin.Username)
+	for _, tc := range []struct {
+		name, query string
+		want        []uint64
+	}{
+		{"组合多选", "actor=alice,bob&action=instances.stop,instances.reboot&result=failed,succeeded", []uint64{rows[1].ID, rows[0].ID}},
+		{"重复参数", "action=instances.stop&action=instances.reboot&result=failed&result=denied", []uint64{rows[2].ID, rows[0].ID}},
+		{"旧单值", "actor=alice&action=instances.stop&result=failed", []uint64{rows[0].ID}},
+		{"展示状态", "actor=alice,bob&result=accepted,succeeded", []uint64{rows[5].ID, rows[1].ID}},
+		{"空筛选", "actor=&action=&result=", []uint64{rows[5].ID, rows[4].ID, rows[3].ID, rows[2].ID, rows[1].ID, rows[0].ID}},
+		{"时间组合", "action=instances.stop,instances.reboot&from=2099-01-01T00:00:00Z", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			response := sendRequest(a, "GET", "/api/audits?q="+url.QueryEscape("多选筛选目标")+"&"+tc.query, nil, cookie, "")
+			requireCode(t, response, 200)
+			var page struct {
+				Items []Audit
+				Total int
+			}
+			if err := json.Unmarshal(response.Body.Bytes(), &page); err != nil {
+				t.Fatal(err)
+			}
+			ids := make([]uint64, 0, len(page.Items))
+			for _, row := range page.Items {
+				ids = append(ids, row.ID)
+			}
+			if page.Total != len(tc.want) || !slices.Equal(ids, tc.want) {
+				t.Fatalf("多选筛选结果错误: total=%d, ids=%v, want=%v", page.Total, ids, tc.want)
+			}
+		})
+	}
+}
 
 func TestPostgresAuditSnapshotPreservesNamesAndInstanceResults(t *testing.T) {
 	a, admin := integrationApp(t)

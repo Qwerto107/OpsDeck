@@ -21,10 +21,10 @@ import StatusBadge from "../components/StatusBadge.vue";
 const rows = ref<Audit[]>([]),
   total = ref(0),
   page = ref(1),
-  actor = ref(""),
-  action = ref(""),
+  actor = ref<string[]>([]),
+  action = ref<string[]>([]),
   q = ref(""),
-  result = ref<string | null>(null),
+  result = ref<string[]>([]),
   range = ref<[number, number] | null>(null),
   busy = ref(false),
   error = ref("");
@@ -124,9 +124,9 @@ async function load() {
       "/audits" +
         query({
           page: page.value,
-          actor: actor.value,
-          action: action.value,
-          result: result.value,
+          actor: actor.value.join(","),
+          action: action.value.join(","),
+          result: result.value.join(","),
           q: q.value,
           from: range.value ? new Date(range.value[0]).toISOString() : null,
           to: range.value ? new Date(range.value[1]).toISOString() : null,
@@ -238,15 +238,24 @@ onUnmounted(() => {
         clearable
         aria-label="搜索审计日志"
         ><template #prefix><Search :size="15" /></template></n-input
-      ><n-input
+      ><n-select
         v-model:value="actor"
+        multiple
+        tag
+        filterable
+        max-tag-count="responsive"
+        :options="[]"
         class="filter"
         placeholder="操作人账号"
+        aria-label="审计操作人筛选"
         clearable
       /><n-select
         v-model:value="action"
+        multiple
+        max-tag-count="responsive"
         class="filter"
         placeholder="操作类型"
+        aria-label="审计操作类型筛选"
         :options="
           Object.entries(actionLabels).map(([value, label]) => ({
             value,
@@ -257,8 +266,11 @@ onUnmounted(() => {
         clearable
       /><n-select
         v-model:value="result"
+        multiple
+        max-tag-count="responsive"
         class="filter"
         placeholder="全部结果"
+        aria-label="审计结果筛选"
         :options="
           Object.keys(resultLabels)
             .filter((value) => value !== 'skipped')

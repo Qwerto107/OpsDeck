@@ -507,11 +507,11 @@ func (a *App) saveSettings(c *gin.Context) {
 func (a *App) audits(c *gin.Context) {
 	db := a.DB.Model(&Audit{})
 	for _, k := range []string{"actor", "action", "result"} {
-		if v := c.Query(k); v != "" {
+		if values := queryValues(c, k); len(values) > 0 {
 			if k == "result" {
-				db = db.Where("COALESCE((SELECT status FROM tasks WHERE audit_id = audits.id ORDER BY id DESC LIMIT 1), CASE WHEN action IN ('accounts.sync','resources.sync') AND result = 'success' THEN 'accepted' ELSE result END) = ?", v)
+				db = db.Where("COALESCE((SELECT status FROM tasks WHERE audit_id = audits.id ORDER BY id DESC LIMIT 1), CASE WHEN action IN ('accounts.sync','resources.sync') AND result = 'success' THEN 'accepted' ELSE result END) IN ?", values)
 			} else {
-				db = db.Where(k+" = ?", v)
+				db = db.Where(k+" IN ?", values)
 			}
 		}
 	}
