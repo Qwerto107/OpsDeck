@@ -154,16 +154,19 @@ func (a *Alibaba) instances(ctx context.Context, ac CloudAccount, region, kind, 
 				spec := obj(m, "ResourceSpec")
 				r.Spec = str(m, "PlanId")
 				r.CPU = num(spec, "Cpu")
-				mem, _ := strconv.ParseFloat(str(spec, "Memory"), 64)
-				r.Memory = int(mem)
+				r.Memory = num(spec, "Memory")
 				r.Disk = num(spec, "DiskSize")
 				r.PublicIP = str(m, "PublicIpAddress")
 				r.PrivateIP = str(m, "InnerIpAddress")
 				tags = array(m, "Tags")
 			}
-			for _, t := range tags {
-				if tag, ok := t.(map[string]any); ok {
-					r.Tags[str(tag, "Key")] = str(tag, "Value")
+			key, value := "TagKey", "TagValue"
+			if kind == "sas" {
+				key, value = "Key", "Value"
+			}
+			for _, item := range tags {
+				if tag, ok := item.(map[string]any); ok && str(tag, key) != "" {
+					r.Tags[str(tag, key)] = str(tag, value)
 				}
 			}
 			if _, ok := m["Tags"]; !ok {

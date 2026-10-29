@@ -34,6 +34,7 @@ func (e *CloudError) Error() string { return e.Code }
 type Tencent struct{ Key cipher.AEAD }
 
 func (t *Tencent) Regions(ctx context.Context, ac CloudAccount, kind string) ([]string, error) {
+	region := ""
 	service, version := "region", "2022-06-27"
 	params := map[string]any{"Product": "cvm"}
 	if isDatabase(kind) {
@@ -42,13 +43,18 @@ func (t *Tencent) Regions(ctx context.Context, ac CloudAccount, kind string) ([]
 	}
 	if kind == "postgresql" {
 		service, version = tencentDatabaseProduct(kind)
+		// PostgreSQL 地域发现需指定请求地域，该入口不限制返回的地域列表。
+		region = "ap-guangzhou"
+		if ac.Site == "international" {
+			region = "ap-singapore"
+		}
 		params = map[string]any{}
 	}
 	if kind == "lighthouse" {
 		service, version = cloudProduct(kind)
 		params = map[string]any{}
 	}
-	body, err := t.call(ctx, ac, "", service, version, "DescribeRegions", params)
+	body, err := t.call(ctx, ac, region, service, version, "DescribeRegions", params)
 	if err != nil {
 		return nil, err
 	}
@@ -156,6 +162,9 @@ func (t *Tencent) List(ctx context.Context, ac CloudAccount, region, kind string
 			}
 			r := Resource{AccountID: ac.ID, Provider: "tencent", Kind: kind, Region: region, InstanceID: str(m, "InstanceId"), Name: str(m, "InstanceName"), State: str(m, "InstanceState"), Spec: str(m, "InstanceType"), CPU: num(m, "CPU"), Memory: num(m, "Memory"), PublicIP: ips(m, "PublicIpAddresses"), PrivateIP: ips(m, "PrivateIpAddresses"), Tags: map[string]string{}, Metrics: map[string]Metric{}, SyncedAt: time.Now()}
 			if kind == "lighthouse" {
+				// Lighthouse 的地址字段名与 CVM 不同。
+				r.PublicIP = ips(m, "PublicAddresses")
+				r.PrivateIP = ips(m, "PrivateAddresses")
 				r.Spec = str(m, "BundleId")
 				r.Disk = num(obj(m, "SystemDisk"), "DiskSize")
 			} else {

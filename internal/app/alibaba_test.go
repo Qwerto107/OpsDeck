@@ -90,7 +90,7 @@ func TestAlibabaListAndOperationParameters(t *testing.T) {
 	a, ac := alibabaFixture(t, func(r *http.Request) map[string]any {
 		switch r.URL.Query().Get("Action") {
 		case "DescribeInstances":
-			return map[string]any{"Instances": map[string]any{"Instance": []any{map[string]any{"InstanceId": "i-test", "InstanceName": "测试", "Status": "Running", "Cpu": 2, "Memory": 4096, "VpcAttributes": map[string]any{"PrivateIpAddress": map[string]any{"IpAddress": []string{"10.0.0.1"}}}}}}}
+			return map[string]any{"Instances": map[string]any{"Instance": []any{map[string]any{"InstanceId": "i-test", "InstanceName": "测试", "Status": "Running", "Cpu": 2, "Memory": 4096, "PublicIpAddress": map[string]any{"IpAddress": []string{"203.0.113.10"}}, "VpcAttributes": map[string]any{"PrivateIpAddress": map[string]any{"IpAddress": []string{"10.0.0.1"}}}, "Tags": map[string]any{"Tag": []any{map[string]any{"TagKey": "env", "TagValue": "test"}}}}}}}
 		case "DescribeDisks":
 			return map[string]any{"Disks": map[string]any{"Disk": []any{map[string]any{"InstanceId": "i-test", "Size": 40}, map[string]any{"InstanceId": "i-test", "Size": 80}}}}
 		}
@@ -102,7 +102,7 @@ func TestAlibabaListAndOperationParameters(t *testing.T) {
 		t.Fatalf("%v %v", rows, e)
 	}
 	r := rows[0]
-	if r.Memory != 4 || r.Disk != 120 || r.State != "RUNNING" || r.PrivateIP != "10.0.0.1" {
+	if r.Memory != 4 || r.Disk != 120 || r.State != "RUNNING" || r.PrivateIP != "10.0.0.1" || r.PublicIP != "203.0.113.10" || r.Tags["env"] != "test" || len(r.Tags) != 1 {
 		t.Fatalf("实例配置解析错误: %+v", r)
 	}
 	for _, kind := range []string{"ecs", "sas"} {
@@ -120,6 +120,46 @@ func TestAlibabaListAndOperationParameters(t *testing.T) {
 			if action == "reboot" && p["ForceStop"] == "true" {
 				t.Fatal("普通操作不能强制执行")
 			}
+		}
+	}
+}
+
+func TestAlibabaServerAddressVariants(t *testing.T) {
+	for _, site := range []string{"china", "international"} {
+		for _, kind := range []string{"ecs", "sas"} {
+			t.Run(site+"/"+kind, func(t *testing.T) {
+				a, ac := alibabaFixture(t, func(r *http.Request) map[string]any {
+					if kind == "sas" {
+						if r.URL.Query().Get("Action") != "ListInstances" {
+							t.Fatal("轻量实例应使用 ListInstances")
+						}
+						return map[string]any{"Instances": []any{map[string]any{
+							"InstanceId": "sas-test", "Status": "Running", "PlanId": "plan-test",
+							"PublicIpAddress": "203.0.113.10", "InnerIpAddress": "10.0.0.1",
+							"ResourceSpec": map[string]any{"Cpu": 2, "Memory": 4, "DiskSize": 40},
+							"Tags":         []any{map[string]any{"Key": "env", "Value": "test"}},
+						}}}
+					}
+					return map[string]any{"Instances": map[string]any{"Instance": []any{map[string]any{
+						"InstanceId": "ecs-test", "Status": "Running", "Cpu": 2, "Memory": 4096,
+						"EipAddress":     map[string]any{"IpAddress": "203.0.113.10"},
+						"InnerIpAddress": map[string]any{"IpAddress": []string{"10.0.0.1"}},
+						"Tags":           map[string]any{"Tag": []any{map[string]any{"TagKey": "env", "TagValue": "test"}}},
+					}}}}
+				})
+				ac.Site = site
+				rows, err := a.instances(context.Background(), ac, "ap-southeast-1", kind, "")
+				if err != nil || len(rows) != 1 {
+					t.Fatalf("实例查询失败: count=%d err=%v", len(rows), err)
+				}
+				r := rows[0]
+				if r.PublicIP != "203.0.113.10" || r.PrivateIP != "10.0.0.1" || r.CPU != 2 || r.Memory != 4 || len(r.Tags) != 1 || r.Tags["env"] != "test" {
+					t.Fatal("实例地址、配置或标签解析错误")
+				}
+				if kind == "sas" && (r.Spec != "plan-test" || r.Disk != 40) {
+					t.Fatal("轻量实例规格或磁盘容量解析错误")
+				}
+			})
 		}
 	}
 }

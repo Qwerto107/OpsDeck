@@ -2,12 +2,45 @@ package app
 
 import (
 	"context"
+	"net/http"
 	"sort"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 )
+
+func TestTencentPostgresRegionsIncludesRequiredRegion(t *testing.T) {
+	for _, test := range []struct {
+		site, region, host string
+	}{
+		{"china", "ap-guangzhou", "postgres.tencentcloudapi.com"},
+		{"international", "ap-singapore", "postgres.intl.tencentcloudapi.com"},
+	} {
+		t.Run(test.site, func(t *testing.T) {
+			client, account := monitorClient(t, func(map[string]any) map[string]any {
+				return map[string]any{"RegionSet": []any{
+					map[string]any{"Region": "ap-shanghai", "RegionState": "AVAILABLE"},
+				}}
+			})
+			account.Site = test.site
+			transport := http.DefaultTransport
+			http.DefaultTransport = monitorTransport(func(request *http.Request) (*http.Response, error) {
+				if request.Header.Get("X-TC-Region") != test.region {
+					t.Errorf("PostgreSQL 地域查询未传入正确的请求地域: %q", request.Header.Get("X-TC-Region"))
+				}
+				if request.URL.Host != test.host || request.Header.Get("X-TC-Action") != "DescribeRegions" || request.Header.Get("X-TC-Version") != "2017-03-12" {
+					t.Error("PostgreSQL 地域查询的端点、接口或版本错误")
+				}
+				return transport.RoundTrip(request)
+			})
+			regions, err := client.Regions(context.Background(), account, "postgresql")
+			if err != nil || len(regions) != 1 || regions[0] != "ap-shanghai" {
+				t.Fatalf("地域发现不应受请求入口地域限制: %v %v", regions, err)
+			}
+		})
+	}
+}
 
 func TestAvailableRegionsValidatesAndFilters(t *testing.T) {
 	got, err := availableRegions(map[string]any{"RegionSet": []any{
