@@ -216,7 +216,9 @@ func (a *App) refreshMonitor(ctx context.Context, task Task) {
 					}
 				}
 				r.ID, r.Metrics = old.ID, values
-				if err := a.DB.Model(&r).Select("Name", "PublicIP", "PrivateIP", "Spec", "CPU", "Memory", "Disk", "State", "Tags", "TagsError", "Metrics", "Database", "SyncedAt").Updates(&r).Error; err != nil {
+				refreshedAt := time.Now()
+				r.MonitorRefreshedAt = &refreshedAt
+				if err := a.DB.Model(&r).Select("Name", "PublicIP", "PrivateIP", "Spec", "CPU", "Memory", "Disk", "State", "Tags", "TagsError", "Metrics", "Database", "SyncedAt", "MonitorRefreshedAt").Updates(&r).Error; err != nil {
 					results[i].Error = "无法保存监控快照"
 					continue
 				}

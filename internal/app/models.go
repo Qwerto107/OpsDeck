@@ -54,30 +54,31 @@ type Metric struct {
 	Mount     string     `json:"mount,omitempty"`
 }
 type Resource struct {
-	MonitorPrefix     string            `json:"-" gorm:"-"`
-	Database          *DatabaseInfo     `json:"database,omitempty" gorm:"serializer:json;type:jsonb"`
-	ID                uint64            `json:"id"`
-	AccountID         uint64            `json:"account_id"`
-	Provider          string            `json:"provider"`
-	Kind              string            `json:"kind"`
-	Region            string            `json:"region"`
-	InstanceID        string            `json:"instance_id"`
-	Name              string            `json:"name"`
-	PublicIP          string            `json:"public_ip"`
-	PrivateIP         string            `json:"private_ip"`
-	Spec              string            `json:"spec"`
-	CPU               int               `json:"cpu"`
-	Memory            int               `json:"memory"`
-	Disk              int               `json:"disk"`
-	State             string            `json:"state"`
-	Tags              map[string]string `json:"tags" gorm:"serializer:json;type:jsonb"`
-	TagsError         string            `json:"tags_error"`
-	Metrics           map[string]Metric `json:"metrics" gorm:"serializer:json;type:jsonb"`
-	SyncedAt          time.Time         `json:"synced_at"`
-	AccountName       string            `json:"account_name" gorm:"-"`
-	AllowedActions    []string          `json:"allowed_actions" gorm:"-"`
-	OperationStatus   string            `json:"operation_status" gorm:"-"`
-	CanRefreshMonitor bool              `json:"can_refresh_monitor" gorm:"-"`
+	MonitorPrefix      string            `json:"-" gorm:"-"`
+	Database           *DatabaseInfo     `json:"database,omitempty" gorm:"serializer:json;type:jsonb"`
+	ID                 uint64            `json:"id"`
+	AccountID          uint64            `json:"account_id"`
+	Provider           string            `json:"provider"`
+	Kind               string            `json:"kind"`
+	Region             string            `json:"region"`
+	InstanceID         string            `json:"instance_id"`
+	Name               string            `json:"name"`
+	PublicIP           string            `json:"public_ip"`
+	PrivateIP          string            `json:"private_ip"`
+	Spec               string            `json:"spec"`
+	CPU                int               `json:"cpu"`
+	Memory             int               `json:"memory"`
+	Disk               int               `json:"disk"`
+	State              string            `json:"state"`
+	Tags               map[string]string `json:"tags" gorm:"serializer:json;type:jsonb"`
+	TagsError          string            `json:"tags_error"`
+	Metrics            map[string]Metric `json:"metrics" gorm:"serializer:json;type:jsonb"`
+	SyncedAt           time.Time         `json:"synced_at"`
+	MonitorRefreshedAt *time.Time        `json:"-"`
+	AccountName        string            `json:"account_name" gorm:"-"`
+	AllowedActions     []string          `json:"allowed_actions" gorm:"-"`
+	OperationStatus    string            `json:"operation_status" gorm:"-"`
+	CanRefreshMonitor  bool              `json:"can_refresh_monitor" gorm:"-"`
 }
 
 type DatabaseEndpoint struct {
@@ -138,6 +139,7 @@ type Settings struct {
 	TrustedProxies []string `json:"trusted_proxies" gorm:"serializer:json;type:jsonb"`
 	ID             int      `json:"-"`
 	StaleMinutes   int      `json:"stale_minutes"`
+	AutoRefresh    bool     `json:"auto_refresh"`
 	IdleMinutes    int      `json:"idle_minutes"`
 	MaxHours       int      `json:"max_hours"`
 	RetentionDays  int      `json:"retention_days"`

@@ -10,6 +10,7 @@ export const useSession = defineStore("session", () => {
     app_url: "",
     trusted_proxies: [],
     stale_minutes: 10,
+    auto_refresh: true,
     idle_minutes: 480,
     max_hours: 72,
     retention_days: 180,

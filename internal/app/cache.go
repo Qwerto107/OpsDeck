@@ -10,6 +10,8 @@ type resourceCache struct {
 	TTLSeconds        int        `json:"ttl_seconds"`
 	SampledAt         *time.Time `json:"sampled_at"`
 	StaleAfterSeconds int        `json:"stale_after_seconds"`
+	MonitorUpdatedAt  *time.Time `json:"monitor_updated_at"`
+	AutoRefresh       bool       `json:"auto_refresh"`
 }
 
 func (a *App) monitorSample(cache *resourceCache, rows []Resource) error {
@@ -18,10 +20,20 @@ func (a *App) monitorSample(cache *resourceCache, rows []Resource) error {
 		return err
 	}
 	cache.StaleAfterSeconds = settings.StaleMinutes * 60
+	cache.TTLSeconds = settings.StaleMinutes * 60
+	eligible, missingRefresh := false, false
 	// 使用当前可见指标的实际采样时间，不能把任务结束时间当成云监控采样时间。
 	for _, r := range rows {
 		if r.State != "RUNNING" {
 			continue
+		}
+		if r.CanRefreshMonitor && (isDatabase(r.Kind) || len(settings.Metrics) > 0) {
+			eligible = true
+			if r.MonitorRefreshedAt == nil {
+				missingRefresh = true
+			} else if cache.MonitorUpdatedAt == nil || r.MonitorRefreshedAt.Before(*cache.MonitorUpdatedAt) {
+				cache.MonitorUpdatedAt = r.MonitorRefreshedAt
+			}
 		}
 		for _, metric := range r.Metrics {
 			if metric.Value != nil && metric.SampledAt != nil && (cache.SampledAt == nil || metric.SampledAt.Before(*cache.SampledAt)) {
@@ -30,12 +42,16 @@ func (a *App) monitorSample(cache *resourceCache, rows []Resource) error {
 			}
 		}
 	}
+	if missingRefresh {
+		cache.MonitorUpdatedAt = nil
+	}
+	cache.AutoRefresh = settings.AutoRefresh && eligible
 	return nil
 }
 
-// 过期快照继续可读；只有用户明确刷新才回源，避免重载页面触发云请求。
+// GET 始终只读快照；页面按开关和有效期另行提交监控刷新任务。
 func (a *App) resourceCache(u User, accounts []CloudAccount, selected ...uint64) (resourceCache, error) {
-	cache := resourceCache{TTLSeconds: 180}
+	cache := resourceCache{TTLSeconds: 600}
 	ids := []uint64{}
 	for _, ac := range accounts {
 		if len(selected) == 0 && !ac.Enabled {

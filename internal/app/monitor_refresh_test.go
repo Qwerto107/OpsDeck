@@ -98,6 +98,9 @@ func TestPostgresSelectedMonitorRefreshPreservesFailuresAndRetryScope(t *testing
 	a.DB.First(&good, ids[0])
 	a.DB.First(&bad, ids[1])
 	a.DB.First(&unselected, cloud.rows[2].ID)
+	if good.MonitorRefreshedAt == nil || bad.MonitorRefreshedAt != nil || unselected.MonitorRefreshedAt != nil {
+		t.Fatal("成功获取时间错误，或失败项、未选项的缓存有效期被延长")
+	}
 	if *good.Metrics["cpu"].Value != 42 || *bad.Metrics["cpu"].Value != oldValue || !bad.Metrics["cpu"].SampledAt.Equal(oldSample) || *unselected.Metrics["cpu"].Value != oldValue {
 		t.Fatal("成功项未更新，或失败项、未选项的旧数据被覆盖")
 	}
@@ -125,7 +128,7 @@ func TestPostgresSelectedMonitorRefreshPreservesFailuresAndRetryScope(t *testing
 	w = sendRequest(a, "GET", "/api/resources?category=server", nil, cookie, "")
 	requireCode(t, w, 200)
 	var page struct{ Cache resourceCache }
-	if err := json.Unmarshal(w.Body.Bytes(), &page); err != nil || page.Cache.StaleAfterSeconds != 1200 || page.Cache.SampledAt == nil || !page.Cache.SampledAt.Equal(oldSample) {
+	if err := json.Unmarshal(w.Body.Bytes(), &page); err != nil || page.Cache.StaleAfterSeconds != 1200 || page.Cache.TTLSeconds != 1200 || page.Cache.SampledAt == nil || !page.Cache.SampledAt.Equal(oldSample) {
 		t.Fatal("采样时间或自定义过期时间错误")
 	}
 }

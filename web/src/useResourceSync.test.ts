@@ -12,7 +12,7 @@ vi.mock("vue", async (original) => ({
 }));
 const cacheAt = (minutes = 0): ResourceCache => ({
   updated_at: new Date().toISOString(),
-  ttl_seconds: 180,
+  ttl_seconds: 600,
   sampled_at: new Date(Date.now() - minutes * 60000).toISOString(),
   stale_after_seconds: 600,
 });
@@ -159,5 +159,92 @@ describe("手动监控刷新", () => {
     expect(sync.syncState.value.error).toContain("无法确认刷新结果");
     expect(sync.syncState.value.success).toBe("");
     expect(load).not.toHaveBeenCalled();
+  });
+});
+
+describe("自动监控刷新", () => {
+  it("进入过期页面自动刷新，冷却期内不因旧采样重复回源", async () => {
+    const cache = ref<ResourceCache | undefined>();
+    request.mockResolvedValue({
+      tasks: [
+        { id: 8, status: "succeeded", results: [result(1, "succeeded")] },
+      ],
+    });
+    const load = vi.fn(async () => {
+      cache.value = {
+        ...cacheAt(12),
+        auto_refresh: true,
+        monitor_updated_at: new Date().toISOString(),
+      };
+    });
+    useResourceSync(load, () => ({ resource_ids: [1] }), cache);
+    expect(request).not.toHaveBeenCalled();
+    cache.value = {
+      ...cacheAt(12),
+      auto_refresh: true,
+      monitor_updated_at: null,
+    };
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(load).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(598000);
+    expect(
+      request.mock.calls.filter(([path]) => path === "/resources/sync"),
+    ).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(
+      request.mock.calls.filter(([path]) => path === "/resources/sync"),
+    ).toHaveLength(2);
+  });
+
+  it("有效缓存不因进入页面刷新，到期才刷新；关闭开关后停止", async () => {
+    const cache = ref({
+      ...cacheAt(),
+      auto_refresh: true,
+      monitor_updated_at: new Date().toISOString(),
+    });
+    request.mockResolvedValue({ tasks: [{ id: 7, status: "submitting" }] });
+    useResourceSync(vi.fn(), () => ({ resource_ids: [1] }), cache);
+    await vi.advanceTimersByTimeAsync(599000);
+    expect(request).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(request).toHaveBeenCalledWith("/resources/sync", "POST", {
+      resource_ids: [1],
+    });
+    cache.value = { ...cache.value, auto_refresh: false };
+    request.mockResolvedValue({
+      tasks: [{ id: 7, status: "failed", error: "权限不足" }],
+    });
+    await vi.advanceTimersByTimeAsync(700000);
+    expect(
+      request.mock.calls.filter(([path]) => path === "/resources/sync"),
+    ).toHaveLength(1);
+  });
+
+  it("失败后间隔缓存时长再尝试，离开页面后停止", async () => {
+    request.mockRejectedValue(new Error("云接口不可用"));
+    const sync = useResourceSync(
+      vi.fn(),
+      () => ({ resource_ids: [1] }),
+      ref({ ...cacheAt(12), auto_refresh: true }),
+    );
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(sync.syncState.value.error).toContain("云接口不可用");
+    await vi.advanceTimersByTimeAsync(598000);
+    expect(request).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(request).toHaveBeenCalledTimes(2);
+    hooks.unmounted.forEach((fn) => fn());
+    await vi.advanceTimersByTimeAsync(700000);
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("空列表及无监控权限时不自动创建任务", async () => {
+    useResourceSync(
+      vi.fn(),
+      () => ({ resource_ids: [] }),
+      ref({ ...cacheAt(12), auto_refresh: true }),
+    );
+    await vi.advanceTimersByTimeAsync(200000);
+    expect(request).not.toHaveBeenCalled();
   });
 });

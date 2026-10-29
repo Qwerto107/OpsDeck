@@ -340,27 +340,35 @@ func (a *App) syncRegion(ctx context.Context, ac CloudAccount, region, kind stri
 	if a.DB.Where("account_id = ? AND region = ? AND kind = ?", ac.ID, region, kind).Find(&previous).Error != nil {
 		return &CloudError{Code: "SnapshotReadFailed", Message: "数据库资源快照读取失败"}
 	}
-	oldMetrics := map[string]map[string]Metric{}
+	oldResources := map[string]Resource{}
 	for _, r := range previous {
-		oldMetrics[r.InstanceID] = r.Metrics
+		oldResources[r.InstanceID] = r
 	}
 	ids := make([]string, 0, len(rows))
 	for _, r := range rows {
 		ids = append(ids, r.InstanceID)
 		r.Metrics = metrics[r.InstanceID]
+		r.MonitorRefreshedAt = oldResources[r.InstanceID].MonitorRefreshedAt
 		if r.Metrics == nil {
 			r.Metrics = map[string]Metric{}
 		}
+		good, failed := false, false
 		for key, metric := range r.Metrics {
+			good = good || (metric.Value != nil && metric.SampledAt != nil && metric.Status == "ok")
 			if metric.Status == "error" {
+				failed = true
 				issues = append(issues, &CloudError{Code: "MonitorQueryFailed", Message: r.InstanceID + " / " + key + "：" + metric.Reason})
 			}
+		}
+		if good && !failed && r.State == "RUNNING" && len(enabled) > 0 {
+			refreshedAt := time.Now()
+			r.MonitorRefreshedAt = &refreshedAt
 		}
 		if r.TagsError != "" {
 			issues = append(issues, &CloudError{Code: "TagQueryFailed", Message: r.InstanceID + "：" + r.TagsError})
 		}
 		// 账号同步同样保留失败指标的旧值，避免刷新失败后把已有监控清空。
-		for key, old := range oldMetrics[r.InstanceID] {
+		for key, old := range oldResources[r.InstanceID].Metrics {
 			current := r.Metrics[key]
 			if old.Value != nil && (current.Status == "error" || (current.SampledAt != nil && old.SampledAt != nil && current.SampledAt.Before(*old.SampledAt))) {
 				old.Status = "stale"
@@ -370,7 +378,7 @@ func (a *App) syncRegion(ctx context.Context, ac CloudAccount, region, kind stri
 				r.Metrics[key] = old
 			}
 		}
-		if err := a.DB.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "account_id"}, {Name: "kind"}, {Name: "region"}, {Name: "instance_id"}}, DoUpdates: clause.AssignmentColumns([]string{"name", "public_ip", "private_ip", "spec", "cpu", "memory", "disk", "state", "tags", "tags_error", "metrics", "database", "synced_at"})}).Create(&r).Error; err != nil {
+		if err := a.DB.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "account_id"}, {Name: "kind"}, {Name: "region"}, {Name: "instance_id"}}, DoUpdates: clause.AssignmentColumns([]string{"name", "public_ip", "private_ip", "spec", "cpu", "memory", "disk", "state", "tags", "tags_error", "metrics", "database", "synced_at", "monitor_refreshed_at"})}).Create(&r).Error; err != nil {
 			issues = append(issues, &CloudError{Code: "SnapshotPersistFailed", Message: "数据库资源快照写入失败：" + r.InstanceID})
 			return errors.Join(issues...)
 		}

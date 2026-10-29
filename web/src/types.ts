@@ -72,6 +72,7 @@ export interface Settings {
   app_url: string;
   trusted_proxies: string[];
   stale_minutes: number;
+  auto_refresh: boolean;
   idle_minutes: number;
   max_hours: number;
   retention_days: number;
@@ -148,6 +149,8 @@ export interface Page<T> {
 }
 
 export interface ResourceCache {
+  auto_refresh?: boolean;
+  monitor_updated_at?: string | null;
   updated_at: string | null;
   ttl_seconds: number;
   sampled_at?: string | null;

@@ -40,7 +40,8 @@ export function useResourceSync(
     startedAt = ref(0),
     completedAt = ref(0);
   let active = true,
-    generation = 0;
+    generation = 0,
+    nextAutoAttempt = 0;
   let pollTimer: ReturnType<typeof setTimeout> | undefined;
   const clock = setInterval(() => {
     now.value = Date.now();
@@ -56,6 +57,10 @@ export function useResourceSync(
     error.value = "";
     results.value = [];
     completedAt.value = 0;
+    nextAutoAttempt = 0;
+  }
+  function postponeAutoRefresh() {
+    nextAutoAttempt = Date.now() + (cache.value?.ttl_seconds || 600) * 1000;
   }
   // 翻页或切换筛选范围后，不把上一批任务的结果显示成当前页的结果。
   watch(() => {
@@ -95,6 +100,7 @@ export function useResourceSync(
       );
     } catch (e) {
       if (!active || run !== generation) return;
+      postponeAutoRefresh();
       syncing.value = false;
       error.value = (e as Error).message;
     }
@@ -128,9 +134,11 @@ export function useResourceSync(
         ),
       ].join("；");
       completedAt.value = now.value = Date.now();
+      postponeAutoRefresh();
       syncing.value = false;
     } catch (e) {
       if (!active || run !== generation) return;
+      postponeAutoRefresh();
       syncing.value = false;
       error.value = "无法确认刷新结果：" + (e as Error).message;
     }
@@ -188,6 +196,28 @@ export function useResourceSync(
       disabled: target().resource_ids?.length === 0,
     };
   });
+  watch(
+    [cache, now],
+    () => {
+      if (
+        !active ||
+        !cache.value?.auto_refresh ||
+        syncing.value ||
+        !target().resource_ids?.length ||
+        now.value < nextAutoAttempt
+      )
+        return;
+      const stamp = cache.value.monitor_updated_at
+        ? Date.parse(cache.value.monitor_updated_at)
+        : 0;
+      const ttl = (cache.value.ttl_seconds || 600) * 1000;
+      if (stamp > 0 && now.value < stamp + ttl) return;
+      // 使用成功获取时间判断缓存；云端采样延迟或失败不会造成连续回源。
+      postponeAutoRefresh();
+      void refresh();
+    },
+    { immediate: true, flush: "post" },
+  );
   onUnmounted(() => {
     active = false;
     reset();

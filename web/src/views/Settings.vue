@@ -206,6 +206,18 @@ onMounted(load);
         >
       </div>
       <div class="form-line">
+        <label>自动刷新数据</label>
+        <div class="control">
+          <n-switch
+            v-model:value="settings.auto_refresh"
+            aria-label="自动刷新数据"
+          />
+          <div class="hint">
+            默认开启。登录并打开服务器、数据库列表或详情时，监控缓存到期会自动刷新当前页或当前实例。缓存有效期使用下方设置；关闭页面后停止自动刷新，失败时保留旧数据。关闭此开关后仅手动刷新。
+          </div>
+        </div>
+      </div>
+      <div class="form-line">
         <label>数据过期提示</label>
         <div class="control">
           <div class="row">
@@ -219,7 +231,7 @@ onMounted(load);
           </div>
           <div class="hint">
             默认 10
-            分钟。超过此时间未取得新采样时高亮提示，仍保留旧数据；仅点击刷新按钮才请求云端，不会自动刷新。
+            分钟，同时作为监控缓存有效期。超过此时间未取得新采样时高亮提示，仍保留旧数据；自动刷新由上方开关控制。
           </div>
         </div>
       </div>
