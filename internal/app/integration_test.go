@@ -73,6 +73,15 @@ func integrationApp(t *testing.T) (*App, User) {
 	if e = db.Exec(string(sql)).Error; e != nil {
 		t.Fatal(e)
 	}
+	for _, name := range []string{"000004_oauth_binding.up.sql", "000005_session_defaults.up.sql"} {
+		sql, e = migrations.Files.ReadFile(name)
+		if e != nil {
+			t.Fatal(e)
+		}
+		if e = db.Exec(string(sql)).Error; e != nil {
+			t.Fatal(e)
+		}
+	}
 	key, e := OpenKey(db, filepath.Join(t.TempDir(), "master.key"), true)
 	if e != nil {
 		t.Fatal(e)
@@ -131,7 +140,11 @@ func TestPostgresAuthenticationAndAudit(t *testing.T) {
 	if count != 1 {
 		t.Fatal("登录失败没有审计")
 	}
-	a.DB.Model(&Session{}).Where("user_id = ?", admin.ID).Update("last_seen", time.Now().Add(-31*time.Minute))
+	settings, err := a.settings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.DB.Model(&Session{}).Where("user_id = ?", admin.ID).Update("last_seen", time.Now().Add(-time.Duration(settings.IdleMinutes+1)*time.Minute))
 	requireCode(t, sendRequest(a, "GET", "/api/me", nil, cookie, ""), 401)
 	cookie, csrf = loginTest(t, a, admin.Username)
 	requireCode(t, sendRequest(a, "POST", "/api/logout", nil, cookie, csrf), 204)

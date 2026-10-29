@@ -10,6 +10,11 @@ const router = createRouter({
     },
     { path: "/", redirect: "/servers" },
     {
+      path: "/oauth/bind",
+      component: () => import("./views/OAuthBind.vue"),
+      meta: { title: "绑定已有账号" },
+    },
+    {
       path: "/databases",
       component: () => import("./views/Databases.vue"),
       meta: { title: "数据库", permission: "resources.read" },
@@ -60,7 +65,7 @@ const router = createRouter({
 router.beforeEach(async (to) => {
   const s = useSession();
   if (!s.ready) await s.load();
-  if (!s.user && to.path !== "/login") return "/login";
+  if (!s.user && !["/login", "/oauth/bind"].includes(to.path)) return "/login";
   if (s.user && to.path === "/login") return "/servers";
   if (s.user?.must_change_password && to.path !== "/profile") return "/profile";
   if (to.meta.permission && !s.can(to.meta.permission as string))

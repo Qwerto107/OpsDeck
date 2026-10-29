@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -220,7 +221,12 @@ func (a *App) oauthCallback(c *gin.Context) {
 	}
 	var identity Identity
 	var u User
-	if a.DB.Where("provider_id = ? AND subject = ?", p.ID, subject).First(&identity).Error != nil || a.DB.Preload("Roles").First(&u, identity.UserID).Error != nil || !u.Enabled {
+	err := a.DB.Where("provider_id = ? AND subject = ?", p.ID, subject).First(&identity).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		a.beginOAuthBinding(c, p, subject)
+		return
+	}
+	if err != nil || a.DB.Preload("Roles").First(&u, identity.UserID).Error != nil || !u.Enabled {
 		failure()
 		return
 	}

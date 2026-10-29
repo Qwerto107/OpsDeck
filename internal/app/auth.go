@@ -11,10 +11,6 @@ import (
 )
 
 func (a *App) login(c *gin.Context) {
-	if c.GetHeader("Origin") != a.Origin {
-		fail(c, 403, "请从平台页面登录")
-		return
-	}
 	var input struct {
 		Username string `json:"username"`
 		Password string `json:"password"`
@@ -22,50 +18,70 @@ func (a *App) login(c *gin.Context) {
 	if !readJSON(c, &input) {
 		return
 	}
-	key := TokenHash(c.ClientIP())
-	var attempts int
-	err := a.DB.Raw(`INSERT INTO login_attempts(key,attempts,expires_at) VALUES(?,1,now()+interval '15 minutes') ON CONFLICT(key) DO UPDATE SET attempts=CASE WHEN login_attempts.expires_at<now() THEN 1 ELSE login_attempts.attempts+1 END,expires_at=CASE WHEN login_attempts.expires_at<now() THEN now()+interval '15 minutes' ELSE login_attempts.expires_at END RETURNING attempts`, key).Scan(&attempts).Error
-	if err != nil {
-		fail(c, 503, "登录服务暂不可用")
-		return
-	}
-	if attempts > 20 {
-		fail(c, 429, "登录尝试过多，请 15 分钟后重试")
-		return
-	}
-	var u User
-	err = a.DB.Preload("Roles").Where("username = ?", input.Username).First(&u).Error
-	hash := u.PasswordHash
-	if err != nil {
-		hash = "$2a$12$W7MZs.YyAEhcOrVn5JBGqe.1PLwc73tMVbKnLS3QYpbJF6Skprp1a"
-	}
-	valid := bcrypt.CompareHashAndPassword([]byte(hash), []byte(input.Password)) == nil
-	if !valid || err != nil || !u.Enabled {
-		if a.record(c, a.DB, "auth.login", "", "failed", "账号或密码错误") != nil {
-			fail(c, 503, "审计服务不可用")
-			return
-		}
-		fail(c, 401, "账号或密码错误")
+	u, ok := a.passwordUser(c, input.Username, input.Password, "auth.login")
+	if !ok {
 		return
 	}
 	c.Set("user", u)
 	if !a.issueSession(c, u, "auth.login") {
 		return
 	}
-	a.DB.Exec("DELETE FROM login_attempts WHERE key = ?", key)
+	a.DB.Exec("DELETE FROM login_attempts WHERE key = ?", TokenHash(c.ClientIP()))
 	a.me(c)
 }
-func (a *App) issueSession(c *gin.Context, u User, action string) bool {
+
+// 密码登录和首次身份绑定共享限流，不能通过另一入口绕过密码尝试上限。
+func (a *App) passwordUser(c *gin.Context, username, password, action string) (User, bool) {
+	if c.GetHeader("Origin") != a.Origin {
+		fail(c, 403, "请从平台页面登录")
+		return User{}, false
+	}
+	key := TokenHash(c.ClientIP())
+	var attempts int
+	err := a.DB.Raw(`INSERT INTO login_attempts(key,attempts,expires_at) VALUES(?,1,now()+interval '15 minutes') ON CONFLICT(key) DO UPDATE SET attempts=CASE WHEN login_attempts.expires_at<now() THEN 1 ELSE login_attempts.attempts+1 END,expires_at=CASE WHEN login_attempts.expires_at<now() THEN now()+interval '15 minutes' ELSE login_attempts.expires_at END RETURNING attempts`, key).Scan(&attempts).Error
+	if err != nil {
+		fail(c, 503, "登录服务暂不可用")
+		return User{}, false
+	}
+	if attempts > 20 {
+		fail(c, 429, "登录尝试过多，请 15 分钟后重试")
+		return User{}, false
+	}
+	var u User
+	err = a.DB.Preload("Roles").Where("username = ?", username).First(&u).Error
+	hash := u.PasswordHash
+	if err != nil {
+		hash = "$2a$12$W7MZs.YyAEhcOrVn5JBGqe.1PLwc73tMVbKnLS3QYpbJF6Skprp1a"
+	}
+	valid := bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)) == nil
+	if !valid || err != nil || !u.Enabled {
+		if a.record(c, a.DB, action, "", "failed", "账号或密码错误") != nil {
+			fail(c, 503, "审计服务不可用")
+			return User{}, false
+		}
+		fail(c, 401, "账号或密码错误")
+		return User{}, false
+	}
+	return u, true
+}
+
+func newSession(userID uint64) (Session, string) {
 	token := RandomToken()
-	s := Session{ID: TokenHash(token), UserID: u.ID, CSRF: RandomToken(), CreatedAt: time.Now(), LastSeen: time.Now()}
+	return Session{ID: TokenHash(token), UserID: userID, CSRF: RandomToken(), CreatedAt: time.Now(), LastSeen: time.Now()}, token
+}
+func (a *App) issueSession(c *gin.Context, u User, action string) bool {
+	s, token := newSession(u.ID)
 	if !a.mutation(c, action, "", func(tx *gorm.DB) error { return tx.Create(&s).Error }) {
 		return false
 	}
+	a.setSession(c, u, s, token)
+	return true
+}
+func (a *App) setSession(c *gin.Context, u User, s Session, token string) {
 	c.SetSameSite(http.SameSiteLaxMode)
 	c.SetCookie("opsdeck_session", token, 60*60*24*7, "/", "", a.Secure, true)
 	c.Set("session", s)
 	c.Set("user", u)
-	return true
 }
 func (a *App) me(c *gin.Context) {
 	u := current(c)

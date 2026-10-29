@@ -8,8 +8,8 @@ export const useSession = defineStore("session", () => {
     ready = ref(false);
   const settings = ref<Settings>({
     refresh_seconds: 60,
-    idle_minutes: 30,
-    max_hours: 8,
+    idle_minutes: 480,
+    max_hours: 72,
     retention_days: 180,
     metrics: ["cpu", "memory", "disk", "network_in", "network_out"],
   });

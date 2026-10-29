@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref } from "vue";
+import { useRoute } from "vue-router";
 import {
   NForm,
   NFormItem,
@@ -13,7 +14,8 @@ import { Link, ShieldCheck } from "lucide-vue-next";
 import { api } from "../api";
 import { useSession } from "../store";
 import type { Identity } from "../types";
-const session = useSession(),
+const route = useRoute(),
+  session = useSession(),
   message = useMessage(),
   password = reactive({ current: "", password: "", repeat: "" }),
   busy = ref(false),
@@ -94,8 +96,14 @@ onMounted(load);
     </section>
     <section v-if="!session.user?.must_change_password" class="panel">
       <h2 class="row"><Link :size="18" />第三方身份关联</h2>
+      <n-alert
+        v-if="route.query.linked === 'true'"
+        type="success"
+        class="error-banner"
+        >绑定成功，下次可直接使用对应第三方身份登录。</n-alert
+      >
       <p class="section-description">
-        先登录已有平台账号，再绑定第三方身份。平台不会按姓名或邮箱自动关联。
+        可在这里主动绑定，也可从登录页发起第三方登录后按向导绑定已有账号。平台不会按姓名或邮箱自动关联。
       </p>
       <div v-for="p in providers" :key="p.id" class="keyline">
         <span>{{ p.name }}</span

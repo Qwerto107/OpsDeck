@@ -52,6 +52,26 @@ describe("API 请求边界", () => {
     await expect(api("/resources")).rejects.toThrow("会话失效");
     expect(dispatchEvent).toHaveBeenCalledTimes(1);
   });
+  it("首次身份绑定的密码错误保留在向导中", async () => {
+    const dispatchEvent = vi.fn();
+    vi.stubGlobal("window", { dispatchEvent });
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          new Response('{"error":"账号或密码错误"}', { status: 401 }),
+        ),
+    );
+    await expect(
+      api("/oauth/bind", "POST", {
+        username: "existing",
+        password: "wrong",
+        confirm: true,
+      }),
+    ).rejects.toThrow("账号或密码错误");
+    expect(dispatchEvent).not.toHaveBeenCalled();
+  });
   it("正确编码标签排序条件和特殊搜索字符，并保留数字零", () => {
     const params = new URLSearchParams(
       query({

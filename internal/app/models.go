@@ -158,6 +158,14 @@ type OAuthState struct {
 	Verifier   string
 	ExpiresAt  time.Time
 }
+type OAuthBinding struct {
+	ID         string `json:"-" gorm:"primaryKey"`
+	ProviderID uint64
+	Subject    string `json:"-"`
+	CSRF       string `json:"-"`
+	ExpiresAt  time.Time
+}
+
 type KeyCheck struct {
 	ID    int
 	Value string
@@ -165,3 +173,5 @@ type KeyCheck struct {
 
 func (OAuthProvider) TableName() string { return "oauth_providers" }
 func (OAuthState) TableName() string    { return "oauth_states" }
+
+func (OAuthBinding) TableName() string { return "oauth_bindings" }

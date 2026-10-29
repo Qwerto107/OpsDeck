@@ -22,7 +22,12 @@ export async function api<T>(
     const data = await response
       .json()
       .catch(() => ({ error: "网络请求未完成" }));
-    if (response.status === 401 && path !== "/login" && path !== "/me")
+    if (
+      response.status === 401 &&
+      path !== "/login" &&
+      path !== "/me" &&
+      path !== "/oauth/bind"
+    )
       window.dispatchEvent(new Event("session-expired"));
     throw new Error(data.error || "请求失败");
   }

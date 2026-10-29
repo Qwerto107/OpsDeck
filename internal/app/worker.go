@@ -58,7 +58,7 @@ func (a *App) cleanup() {
 		for _, q := range []struct {
 			SQL string
 			Arg any
-		}{{"DELETE FROM audits WHERE created_at < ?", cutoff}, {"DELETE FROM tasks WHERE status IN ('succeeded','failed') AND updated_at < ?", cutoff}, {"DELETE FROM oauth_states WHERE expires_at < ?", time.Now()}, {"DELETE FROM login_attempts WHERE expires_at < ?", time.Now()}, {"DELETE FROM sessions WHERE created_at < ?", time.Now().Add(-time.Duration(s.MaxHours) * time.Hour)}} {
+		}{{"DELETE FROM audits WHERE created_at < ?", cutoff}, {"DELETE FROM tasks WHERE status IN ('succeeded','failed') AND updated_at < ?", cutoff}, {"DELETE FROM oauth_states WHERE expires_at < ?", time.Now()}, {"DELETE FROM oauth_bindings WHERE expires_at < ?", time.Now()}, {"DELETE FROM login_attempts WHERE expires_at < ?", time.Now()}, {"DELETE FROM sessions WHERE created_at < ?", time.Now().Add(-time.Duration(s.MaxHours) * time.Hour)}} {
 			if e := tx.Exec(q.SQL, q.Arg).Error; e != nil {
 				return e
 			}

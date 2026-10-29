@@ -169,15 +169,24 @@ onMounted(load);
     </section>
     <section class="panel">
       <h2>登录会话</h2>
+      <p class="section-description">
+        可手动设置两项时限，任一到期都需重新登录。保存后对已有会话生效。
+      </p>
       <div class="form-line">
-        <label>空闲超时</label>
-        <div class="row">
-          <n-input-number
-            v-model:value="settings.idle_minutes"
-            :min="5"
-            :max="1440"
-            class="compact-number"
-          /><span>分钟</span>
+        <label>无操作失效时间</label>
+        <div class="control">
+          <div class="row">
+            <n-input-number
+              v-model:value="settings.idle_minutes"
+              aria-label="无操作失效时间（分钟）"
+              :min="5"
+              :max="1440"
+              class="compact-number"
+            /><span>分钟</span>
+          </div>
+          <div class="hint">
+            默认 480 分钟（8 小时），支持 5 至 1,440 分钟。
+          </div>
         </div>
       </div>
       <div class="form-line">
@@ -185,13 +194,17 @@ onMounted(load);
         <div class="row">
           <n-input-number
             v-model:value="settings.max_hours"
+            aria-label="最长登录时长（小时）"
             :min="1"
             :max="168"
             class="compact-number"
           /><span>小时</span>
         </div>
       </div>
-      <p class="hint">后台轮询不计入用户活动，注销或禁用账号后会话失效。</p>
+      <p class="hint">
+        默认最长 72 小时，可设为 1 至 168
+        小时。点击、键盘操作更新活动时间，后台同步和轮询不会续期。
+      </p>
     </section>
     <section class="panel">
       <h2>审计日志保留</h2>

@@ -112,6 +112,8 @@ func (a *App) Router() *gin.Engine {
 	api := r.Group("/api")
 	api.POST("/login", a.login)
 	api.GET("/oauth/providers", a.publicProviders)
+	api.GET("/oauth/bind", a.pendingOAuthBinding)
+	api.POST("/oauth/bind", a.bindOAuthIdentity)
 	api.GET("/oauth/:id/start", a.oauthStart)
 	api.GET("/oauth/:id/callback", a.oauthCallback)
 	auth := api.Group("")

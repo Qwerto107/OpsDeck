@@ -15,7 +15,8 @@ const username = ref(""),
   session = useSession();
 onMounted(async () => {
   if (route.query.error === "oauth")
-    error.value = "第三方授权失败或身份尚未关联，请使用账号密码登录后绑定。";
+    error.value =
+      "第三方授权未完成或登录方式不可用，请重试或使用账号密码登录。";
   if (route.query.error === "expired") error.value = "会话已失效，请重新登录。";
   try {
     providers.value = await api("/oauth/providers");
@@ -83,6 +84,9 @@ async function login() {
         >
         <template v-if="providers.length">
           <div class="login-alternative">或</div>
+          <p class="login-help">
+            首次使用第三方登录，授权后按提示验证已有平台账号并绑定。
+          </p>
           <n-button
             v-for="p in providers"
             :key="p.id"

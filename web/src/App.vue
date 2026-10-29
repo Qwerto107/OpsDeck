@@ -131,7 +131,10 @@ onUnmounted(() => {
     :date-locale="dateZhCN"
     ><n-message-provider
       ><n-dialog-provider>
-        <div v-if="route.path === '/login'" class="login-root">
+        <div
+          v-if="['/login', '/oauth/bind'].includes(route.path)"
+          class="login-root"
+        >
           <router-view />
         </div>
         <div v-else class="app-shell" :class="{ 'nav-collapsed': collapsed }">
