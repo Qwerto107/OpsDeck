@@ -26,6 +26,8 @@
 | `GET /identities`         | 查询身份关联                                     |
 | `DELETE /identities/:id`  | 管理员解绑并撤销目标用户会话                     |
 
+个人列偏好中，服务器使用 `columns`、`column_order`，数据库使用 `database_columns`、`database_column_order`。列显隐和顺序分别保存，两个页面互不影响。
+
 未关联身份授权成功后跳转 `/oauth/bind`，完成已有账号验证及确认后才建立会话，不自动创建用户。原有 `link=true` 入口仍要求已登录会话。
 
 `GET /oauth/bind` 无需登录，使用短期 HttpOnly 绑定 Cookie 读取 `provider_name`、`subject_hint`、`csrf_token` 和 `expires_at`。凭证有效期为 5 分钟，响应不返回原始绑定凭证或完整第三方标识。
@@ -41,7 +43,7 @@
 | 查询参数            | 内容                                                       |
 | ------------------- | ---------------------------------------------------------- |
 | `category`          | `server` 或 `database`，省略表示全部授权资源               |
-| `account_id`        | 云账号 ID                                                  |
+| `account_id`        | 云账号 ID，可多选                                          |
 | `kind`              | `cvm`、`lighthouse`、`ecs`、`sas`、`mysql` 或 `postgresql` |
 | `region`、`state`   | 地域代码、资源状态                                         |
 | `q`                 | 实例 ID、名称和 IP 搜索；数据库还查询引擎、版本及连接地址  |
@@ -58,11 +60,17 @@
 ]
 ```
 
-排序字段为 `name`、`region`、`tag`；标签排序必须指定 `key`。默认按名称升序，同一字段或标签键不能重复。空值始终排在末尾，过滤和排序先于分页。
+`account_id`、`kind`、`region`、`state` 支持单值、逗号分隔多值及重复查询参数。例如 `account_id=1,2&region=ap-beijing&region=ap-shanghai`。同一筛选项内按“或”匹配，不同筛选项之间按“且”匹配；留空表示不限制。多选不会扩大用户的资源授权范围，缓存更新时间仅统计所选账号。
+
+排序字段为 `name`、`region`、`tag`、`cpu`、`memory`、`disk`；标签排序必须指定 `key`。CPU、内存和磁盘按当前可展示的监控使用率数值排序，不使用实例配置，过期指标沿用页面显示的旧值。默认按名称升序，同一字段或标签键不能重复。缺失值始终排在末尾，过滤和排序先于分页。
+
+列表支持点击实例名称、账号·地域（按地域）及 CPU、内存、磁盘表头排序，依次切换降序、升序和取消。点击的字段成为首要排序，其余字段和标签条件保留，与排序编辑器同步，最多 8 项。
 
 `GET /resources/:id` 返回 `resource`、最近最多 30 条 `tasks` 和 `cache`。`resource.allowed_actions` 为当前可执行操作；无监控权限时不返回指标数据。数据库的 `database` 字段包含 `engine`、`version`、`memory_gb` 和 `endpoints`。
 
-`cache.sampled_at` 为当前页可见监控指标的最早实际采样时间，无采样时为 `null`。`stale_after_seconds` 来自系统设置，默认 600。`updated_at` 和 `ttl_seconds: 180` 保留账号快照信息，不用于监控过期提示。GET 请求和过期均不触发云请求。`resource.can_refresh_monitor` 表示是否可刷新该实例。
+`cache.sampled_at` 为当前页可见监控指标的最早实际采样时间，无采样时为 `null`。`stale_after_seconds` 和 `ttl_seconds` 均来自系统设置的 `stale_minutes`，默认 600 秒，分别用于采样过期提示和监控缓存有效期。`updated_at` 保留账号清单同步时间。
+
+`cache.monitor_updated_at` 为当前页可刷新运行实例的最早成功获取监控时间，任一实例尚未成功获取时为 `null`。`auto_refresh` 表示已开启自动刷新且当前页有可刷新的运行实例。页面仅在缓存到期或尚无缓存时提交当前页或单台实例的刷新任务；GET 接口始终只读。`resource.can_refresh_monitor` 表示是否可刷新该实例。
 
 ## 同步任务
 
@@ -112,9 +120,11 @@
 
 `POST /accounts/:id/sync` 返回 202 和 `tasks` 编号，使用 `/sync-tasks` 跟踪结果。账号 `sync_error` 与完整同步任务的 `error` 按行保留各阶段错误，包含地域、产品、接口、错误码、脱敏说明和云请求 ID。完整账号日志要求 `accounts.manage`；仅有资源查看权限的用户只收到任务状态及概括性失败提示，防止泄露范围外的实例信息。
 
-设置包括 `app_url`、`trusted_proxies`、`metrics`、`stale_minutes`、`idle_minutes`、`max_hours` 和 `retention_days`。`stale_minutes` 默认 10，范围为 1 至 1,440 分钟，只用于过期提示；原 `refresh_seconds` 已移除。缩短审计保留期需额外请求头 `X-Confirm-Retention: true`。
+设置包括 `app_url`、`trusted_proxies`、`metrics`、`auto_refresh`、`stale_minutes`、`idle_minutes`、`max_hours` 和 `retention_days`。`auto_refresh` 默认 `true`，可手动关闭。`stale_minutes` 默认 10，范围为 1 至 1,440 分钟，同时控制监控缓存有效期和采样过期提示；原 `refresh_seconds` 已移除。缩短审计保留期需额外请求头 `X-Confirm-Retention: true`。
 
 `GET /audits` 保留原始 `action`、`target`、`result`、`message` 和 `request_id`。展示字段为 `target_label`、`target_details`、`target_source`、`display_result` 和 `display_message`；关联任务通过 `task` 返回执行状态、云请求 ID 及逐实例结果。`target_source` 区分快照、历史任务及当前资源解析。名称搜索支持快照和关联任务明细，结果筛选按展示状态判断，历史日志不回写。
+
+审计筛选参数 `actor`、`action`、`result` 支持单值、逗号分隔多值及重复参数。同一项内按“或”匹配，不同项之间按“且”匹配；留空表示不限制。例如 `action=instances.stop,instances.reboot&result=failed,denied` 查询关机或重启中失败、已拒绝的记录。多选可与 `q`、`from`、`to` 及分页组合使用。
 
 ## 健康检查
 
