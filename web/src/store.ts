@@ -7,7 +7,7 @@ export const useSession = defineStore("session", () => {
   const user = ref<User | null>(null),
     ready = ref(false);
   const settings = ref<Settings>({
-    refresh_seconds: 60,
+    stale_minutes: 10,
     idle_minutes: 480,
     max_hours: 72,
     retention_days: 180,

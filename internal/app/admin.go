@@ -450,8 +450,8 @@ func (a *App) saveSettings(c *gin.Context) {
 	if !readJSON(c, &s) {
 		return
 	}
-	if s.RefreshSeconds < 30 || s.RefreshSeconds > 3600 || s.IdleMinutes < 5 || s.IdleMinutes > 1440 || s.MaxHours < 1 || s.MaxHours > 168 || s.RetentionDays < 1 || s.RetentionDays > 3650 {
-		bad(c, "刷新间隔 30～3600 秒，空闲 5～1440 分钟，最长会话 1～168 小时，日志 1～3650 天")
+	if s.StaleMinutes < 1 || s.StaleMinutes > 1440 || s.IdleMinutes < 5 || s.IdleMinutes > 1440 || s.MaxHours < 1 || s.MaxHours > 168 || s.RetentionDays < 1 || s.RetentionDays > 3650 {
+		bad(c, "数据过期提示 1～1440 分钟，空闲 5～1440 分钟，最长会话 1～168 小时，日志 1～3650 天")
 		return
 	}
 	for _, m := range s.Metrics {

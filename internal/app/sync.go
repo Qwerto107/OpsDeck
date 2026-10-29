@@ -10,9 +10,19 @@ import (
 )
 
 type syncProgress struct {
-	ID     uint64 `json:"id"`
-	Status string `json:"status"`
-	Error  string `json:"error"`
+	ID      uint64          `json:"id"`
+	Status  string          `json:"status"`
+	Error   string          `json:"error"`
+	Results []RefreshResult `json:"results"`
+}
+
+func accountSyncProgress(u User, task Task) syncProgress {
+	message := task.Error
+	if message != "" && !Can(u, "accounts.manage", nil) {
+		// 账号同步覆盖完整清单，详情可能包含超出查看者资源范围的实例。
+		message = "云账号同步失败，请联系管理员查看详细日志"
+	}
+	return syncProgress{ID: task.ID, Status: task.Status, Error: message}
 }
 
 func canRefreshAccount(u User, accountID uint64) bool {
@@ -35,8 +45,9 @@ func canRefreshAccount(u User, accountID uint64) bool {
 
 func (a *App) refreshResources(c *gin.Context) {
 	var in struct {
-		AccountID  uint64 `json:"account_id"`
-		ResourceID uint64 `json:"resource_id"`
+		AccountID   uint64   `json:"account_id"`
+		ResourceID  uint64   `json:"resource_id"`
+		ResourceIDs []uint64 `json:"resource_ids"`
 	}
 	if !readJSON(c, &in) {
 		return
@@ -46,17 +57,12 @@ func (a *App) refreshResources(c *gin.Context) {
 		fail(c, 403, "没有资源查看权限")
 		return
 	}
-	if in.ResourceID != 0 {
-		var r Resource
-		if a.DB.First(&r, in.ResourceID).Error != nil {
-			fail(c, 404, "资源不存在")
-			return
+	if in.ResourceIDs != nil || in.ResourceID != 0 {
+		if in.ResourceID != 0 {
+			in.ResourceIDs = append(in.ResourceIDs, in.ResourceID)
 		}
-		if !Can(u, "resources.read", &r) {
-			fail(c, 403, "无权刷新此资源")
-			return
-		}
-		in.AccountID = r.AccountID
+		a.refreshSelected(c, in.ResourceIDs)
+		return
 	}
 	if in.AccountID != 0 && !canRefreshAccount(u, in.AccountID) {
 		fail(c, 403, "无权刷新此云账号")
@@ -85,7 +91,7 @@ func (a *App) refreshResources(c *gin.Context) {
 			if err := tx.Where("account_id = ? AND action = 'sync'", ac.ID).Order("id DESC").First(&task).Error; err != nil {
 				return err
 			}
-			out = append(out, syncProgress{task.ID, task.Status, task.Error})
+			out = append(out, accountSyncProgress(u, task))
 		}
 		return nil
 	}) {
@@ -109,17 +115,36 @@ func (a *App) syncTasks(c *gin.Context) {
 		ids = append(ids, id)
 	}
 	var tasks []Task
-	if a.DB.Where("id IN ? AND action = 'sync'", ids).Find(&tasks).Error != nil {
+	if a.DB.Where("id IN ? AND action IN ?", ids, []string{"sync", "monitor"}).Find(&tasks).Error != nil {
 		fail(c, 503, "无法读取同步状态")
 		return
 	}
 	out := []syncProgress{}
 	for _, task := range tasks {
-		if task.AccountID == nil || !canRefreshAccount(current(c), *task.AccountID) {
+		if task.Action == "monitor" {
+			var resources []Resource
+			if a.DB.Where("id IN ?", task.ResourceIDs).Find(&resources).Error != nil {
+				fail(c, 503, "无法读取刷新范围")
+				return
+			}
+			if len(resources) != len(task.ResourceIDs) {
+				fail(c, 404, "刷新资源已删除")
+				return
+			}
+			for _, r := range resources {
+				if !canRefreshResource(current(c), r) {
+					fail(c, 403, "无权查看刷新状态")
+					return
+				}
+			}
+			out = append(out, syncProgress{ID: task.ID, Status: task.Status, Error: task.Error, Results: task.RefreshResults})
+			continue
+		}
+		if task.AccountID == nil || (!Can(current(c), "accounts.manage", nil) && !canRefreshAccount(current(c), *task.AccountID)) {
 			fail(c, 403, "无权查看同步状态")
 			return
 		}
-		out = append(out, syncProgress{task.ID, task.Status, task.Error})
+		out = append(out, accountSyncProgress(current(c), task))
 	}
 	if len(tasks) != len(slices.Compact(slices.Sorted(slices.Values(ids)))) {
 		fail(c, 404, "同步任务不存在或已过期")

@@ -158,11 +158,20 @@ onMounted(load);
         >
       </div>
       <div class="form-line">
-        <label>数据缓存</label>
+        <label>数据过期提示</label>
         <div class="control">
-          <span>3 分钟</span>
+          <div class="row">
+            <n-input-number
+              v-model:value="settings.stale_minutes"
+              aria-label="数据过期提示（分钟）"
+              :min="1"
+              :max="1440"
+              class="compact-number"
+            /><span>分钟</span>
+          </div>
           <div class="hint">
-            页面进入和重载仅读取已有数据；过期后保留旧数据，点击更新按钮才会同步云端数据。
+            默认 10
+            分钟。超过此时间未取得新采样时高亮提示，仍保留旧数据；仅点击刷新按钮才请求云端，不会自动刷新。
           </div>
         </div>
       </div>

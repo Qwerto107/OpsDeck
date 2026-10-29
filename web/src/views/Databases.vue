@@ -12,16 +12,9 @@ import {
   NSelect,
 } from "naive-ui";
 import type { DataTableColumns } from "naive-ui";
-import {
-  RefreshCw,
-  Search,
-  SlidersHorizontal,
-  X,
-  ArrowUp,
-  ArrowDown,
-} from "lucide-vue-next";
+import { Search, Plus, X, ArrowUp, ArrowDown } from "lucide-vue-next";
 import { api, query } from "../api";
-import { databaseKinds } from "../clouds";
+import { databaseKinds, databaseMetrics } from "../clouds";
 import { useResourceSync } from "../useResourceSync";
 import type {
   Account,
@@ -31,6 +24,8 @@ import type {
   SortRule,
 } from "../types";
 import StatusBadge from "../components/StatusBadge.vue";
+import ResourceSyncControl from "../components/ResourceSyncControl.vue";
+import MetricValue from "../components/MetricValue.vue";
 
 const rows = ref<Resource[]>([]),
   accounts = ref<Account[]>([]),
@@ -74,7 +69,16 @@ const states = [
 ];
 let sequence = 0,
   timer: ReturnType<typeof setTimeout>;
+function validSorts() {
+  return (
+    sorts.value.every((r) => r.field !== "tag" || r.key?.trim()) &&
+    new Set(
+      sorts.value.map((r) => r.field + (r.field === "tag" ? ":" + r.key : "")),
+    ).size === sorts.value.length
+  );
+}
 async function load() {
+  if (!validSorts()) return;
   const seq = ++sequence;
   loading.value = true;
   error.value = "";
@@ -103,9 +107,13 @@ async function load() {
     if (seq === sequence) loading.value = false;
   }
 }
-const { refresh, syncing, syncStatus, syncError, cacheLabel } = useResourceSync(
+const { refresh, retryFailed, syncState } = useResourceSync(
   load,
-  () => ({ account_id: account.value }),
+  () => ({
+    resource_ids: rows.value
+      .filter((r) => r.can_refresh_monitor)
+      .map((r) => r.id),
+  }),
   cache,
 );
 function moveSort(index: number, delta: number) {
@@ -118,7 +126,7 @@ const columns: DataTableColumns<Resource> = [
   {
     title: "实例",
     key: "name",
-    width: 200,
+    width: 185,
     fixed: "left",
     render: (r) =>
       h("div", [
@@ -127,7 +135,7 @@ const columns: DataTableColumns<Resource> = [
           { to: "/databases/" + r.id, class: "instance-name" },
           () => r.name,
         ),
-        h("div", { class: "subline mono" }, r.instance_id),
+        h("span", { class: "mono muted" }, r.instance_id),
       ]),
   },
   {
@@ -139,18 +147,18 @@ const columns: DataTableColumns<Resource> = [
   {
     title: "账号 · 地域",
     key: "account",
-    width: 180,
+    width: 150,
     render: (r) =>
       h("div", [r.account_name, h("div", { class: "subline" }, r.region)]),
   },
   {
     title: "状态",
     key: "state",
-    width: 130,
+    width: 105,
     render: (r) => h(StatusBadge, { value: r.state }),
   },
   {
-    title: "规格 / 配置",
+    title: "规格与配置",
     key: "spec",
     width: 220,
     render: (r) =>
@@ -163,6 +171,16 @@ const columns: DataTableColumns<Resource> = [
         ),
       ]),
   },
+  ...databaseMetrics.map(({ key, label }) => ({
+    title: label,
+    key: "metric_" + key,
+    width: key === "disk" ? 145 : 110,
+    render: (resource: Resource) =>
+      h(MetricValue, {
+        metric: resource.metrics?.[key],
+        bar: key !== "connections",
+      }),
+  })),
   {
     title: "连接地址",
     key: "endpoints",
@@ -184,13 +202,19 @@ const columns: DataTableColumns<Resource> = [
   {
     title: "标签",
     key: "tags",
-    width: 180,
+    width: 160,
     render: (r) =>
-      r.tags_error ||
-      Object.entries(r.tags || {})
-        .map(([k, v]) => `${k}: ${v}`)
-        .join("；") ||
-      "无标签",
+      r.tags_error
+        ? h("span", { class: "metric-na" }, "标签获取失败")
+        : Object.keys(r.tags || {}).length
+          ? h(
+              "div",
+              { class: "tag-list" },
+              Object.entries(r.tags).map(([k, v]) =>
+                h("span", { class: "resource-tag" }, `${k}: ${v}`),
+              ),
+            )
+          : h("span", { class: "muted" }, "无标签"),
   },
   {
     title: "详情",
@@ -227,18 +251,6 @@ onUnmounted(() => {
 });
 </script>
 <template>
-  <div class="row spread wrap" style="margin-bottom: 20px">
-    <div>
-      <h1 class="page-title">数据库</h1>
-      <p class="muted">MySQL 与 PostgreSQL 资源，只读展示</p>
-    </div>
-    <div class="row wrap">
-      <span class="muted small">{{ cacheLabel }}</span
-      ><n-button :loading="syncing" @click="refresh"
-        ><template #icon><RefreshCw :size="15" /></template>更新</n-button
-      >
-    </div>
-  </div>
   <div class="panel">
     <div class="toolbar">
       <n-input
@@ -278,69 +290,104 @@ onUnmounted(() => {
         clearable
         aria-label="数据库状态筛选"
       />
-      <n-popover trigger="click" placement="bottom-end"
+    </div>
+    <div class="sortbar">
+      <span class="muted small">排序</span
+      ><span v-for="(r, i) in sorts" :key="i" class="sort-chip"
+        ><small>{{ i + 1 }}</small
+        >{{
+          r.field === "tag"
+            ? "标签 " + r.key
+            : r.field === "region"
+              ? "地域"
+              : "名称"
+        }}<component :is="r.desc ? ArrowDown : ArrowUp" :size="12" /></span
+      ><n-popover trigger="click" placement="bottom-start"
         ><template #trigger
-          ><n-button><SlidersHorizontal :size="15" />排序</n-button></template
+          ><n-button size="small" quaternary
+            ><Plus :size="14" />调整排序</n-button
+          ></template
         >
-        <div style="width: 520px; max-width: 85vw">
+        <div class="sort-editor">
           <h3>多字段排序</h3>
-          <div
-            v-for="(rule, i) in sorts"
-            :key="i"
-            class="row"
-            style="margin: 12px 0"
-          >
-            <n-select
-              v-model:value="rule.field"
+          <p class="hint" style="margin-bottom: 16px">
+            按优先级依次比较，缺失值始终排在末尾。
+          </p>
+          <div v-for="(r, i) in sorts" :key="i" class="sort-row">
+            <span class="muted">{{ i + 1 }}</span
+            ><n-select
+              v-model:value="r.field"
               :options="fields"
-              aria-label="数据库排序字段"
+              aria-label="排序字段"
             /><n-input
-              v-if="rule.field === 'tag'"
-              v-model:value="rule.key"
-              placeholder="标签键"
-              aria-label="数据库排序标签键"
-            /><n-select
-              :value="rule.desc ? 'desc' : 'asc'"
-              @update:value="(value) => (rule.desc = value === 'desc')"
+              v-if="r.field === 'tag'"
+              v-model:value="r.key"
+              placeholder="标签键，如 environment"
+              aria-label="标签键"
+            /><span v-else /><n-select
+              :value="r.desc ? 'desc' : 'asc'"
+              @update:value="(v) => (r.desc = v === 'desc')"
               :options="directions"
-              aria-label="数据库排序方向"
-            /><n-button
-              :disabled="i === 0"
-              aria-label="提高排序优先级"
-              @click="moveSort(i, -1)"
-              ><ArrowUp :size="14" /></n-button
-            ><n-button
-              :disabled="i === sorts.length - 1"
-              aria-label="降低排序优先级"
-              @click="moveSort(i, 1)"
-              ><ArrowDown :size="14" /></n-button
-            ><n-button aria-label="移除排序条件" @click="sorts.splice(i, 1)"
-              ><X :size="14"
-            /></n-button>
+              aria-label="排序方向"
+            />
+            <div class="row" style="gap: 2px">
+              <n-button
+                text
+                :disabled="i === 0"
+                aria-label="提高排序优先级"
+                @click="moveSort(i, -1)"
+                ><ArrowUp :size="13" /></n-button
+              ><n-button
+                text
+                :disabled="i === sorts.length - 1"
+                aria-label="降低排序优先级"
+                @click="moveSort(i, 1)"
+                ><ArrowDown :size="13" /></n-button
+              ><n-button
+                text
+                aria-label="移除排序条件"
+                @click="sorts.splice(i, 1)"
+                ><X :size="13"
+              /></n-button>
+            </div>
           </div>
-          <n-button
+          <n-alert
+            v-if="!validSorts()"
+            type="warning"
+            style="margin-bottom: 10px"
+            >请填写标签键，且不要重复选择同一字段或标签键。</n-alert
+          ><n-button
+            size="small"
             :disabled="sorts.length >= 8"
             @click="sorts.push({ field: 'tag', key: '', desc: false })"
             >添加排序条件</n-button
           >
         </div></n-popover
-      >
+      ><span class="grow" />
+      <ResourceSyncControl
+        :state="syncState"
+        scope-label="仅刷新当前页有监控权限的实例"
+        @refresh="refresh"
+      />
     </div>
   </div>
-  <n-alert v-if="syncStatus" type="info" class="error-banner">{{
-    syncStatus
-  }}</n-alert
-  ><n-alert v-if="syncError" type="warning" class="error-banner">{{
-    syncError
-  }}</n-alert
-  ><n-alert v-if="error" type="error" class="error-banner">{{ error }}</n-alert>
+  <ResourceSyncControl
+    mode="notice"
+    :state="syncState"
+    @refresh="refresh"
+    @retry="retryFailed"
+  />
+  <n-alert v-if="error" type="error" class="error-banner">{{ error }}</n-alert>
   <div class="panel flush">
     <n-data-table
       :columns="columns"
       :data="rows"
       :loading="loading"
       :bordered="false"
-      :scroll-x="1500"
+      :row-key="(r) => r.id"
+      :scroll-x="
+        columns.reduce((sum, column) => sum + Number(column.width || 100), 0)
+      "
       ><template #empty
         ><n-empty description="暂无符合条件的数据库" style="padding: 40px"
           ><template #extra
@@ -350,7 +397,8 @@ onUnmounted(() => {
       ></n-data-table
     >
     <div class="table-footer">
-      <span class="muted small">共 {{ total }} 个数据库实例</span
+      <span class="muted small"
+        >共 {{ total }} 个数据库实例，仅显示你有权访问的资源</span
       ><n-pagination
         v-model:page="page"
         v-model:page-size="pageSize"

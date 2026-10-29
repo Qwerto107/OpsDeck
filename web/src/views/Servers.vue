@@ -20,7 +20,6 @@ import {
   Search,
   SlidersHorizontal,
   Plus,
-  RefreshCw,
   ArrowUp,
   ArrowDown,
   X,
@@ -39,6 +38,7 @@ import type {
   ResourceCache,
 } from "../types";
 import StatusBadge from "../components/StatusBadge.vue";
+import ResourceSyncControl from "../components/ResourceSyncControl.vue";
 import MetricValue from "../components/MetricValue.vue";
 import ActionModal from "../components/ActionModal.vue";
 const session = useSession(),
@@ -344,12 +344,15 @@ async function load(silent = false) {
     if (seq === request) loading.value = false;
   }
 }
-const { refresh, syncing, syncStatus, syncError, cacheLabel } = useResourceSync(
+const { refresh, retryFailed, syncState } = useResourceSync(
   async () => {
     await load(true);
-    accounts.value = await api("/accounts");
   },
-  () => ({ account_id: account.value }),
+  () => ({
+    resource_ids: rows.value
+      .filter((r) => r.can_refresh_monitor)
+      .map((r) => r.id),
+  }),
   cache,
 );
 function filterChanged() {
@@ -505,18 +508,6 @@ onUnmounted(() => {
         clearable
         aria-label="状态筛选"
       />
-      <div class="row wrap">
-        <n-button
-          quaternary
-          :loading="syncing"
-          aria-label="刷新服务器列表"
-          @click="refresh"
-          ><RefreshCw :size="15" /></n-button
-        ><span class="muted small">{{ cacheLabel }}</span
-        ><span v-if="syncStatus" class="muted small" role="status">{{
-          syncStatus
-        }}</span>
-      </div>
       <n-popover trigger="click" placement="bottom-end"
         ><template #trigger
           ><n-button class="push"
@@ -643,15 +634,20 @@ onUnmounted(() => {
       ><span class="muted small">{{
         saving ? "保存中…" : "按账号自动记忆排序"
       }}</span
-      ><span class="grow" /><span class="muted small"
-        >云监控快照 · 缓存 3 分钟 · 手动更新</span
-      >
+      ><span class="grow" />
+      <ResourceSyncControl
+        :state="syncState"
+        scope-label="仅刷新当前页有监控权限的实例"
+        @refresh="refresh"
+      />
     </div>
   </div>
-  <n-alert v-if="syncError" type="warning" class="error-banner"
-    >{{ syncError }}
-    <n-button text @click="refresh">重试更新</n-button></n-alert
-  >
+  <ResourceSyncControl
+    mode="notice"
+    :state="syncState"
+    @refresh="refresh"
+    @retry="retryFailed"
+  />
   <n-alert
     v-if="error"
     type="error"

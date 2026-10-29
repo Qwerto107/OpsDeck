@@ -1,120 +1,201 @@
 import { computed, onUnmounted, ref, watch, type Ref } from "vue";
 import { api } from "./api";
-import type { ResourceCache } from "./types";
+import type { RefreshResult, ResourceCache } from "./types";
 
 interface SyncTask {
   id: number;
   status: string;
-  error: string;
+  error?: string;
+  results?: RefreshResult[] | null;
 }
 interface Progress {
   tasks: SyncTask[];
 }
+export interface ResourceSyncState {
+  loading: boolean;
+  expired: boolean;
+  label: string;
+  staleText: string;
+  elapsedSeconds: number;
+  success: string;
+  updated: boolean;
+  failures: RefreshResult[];
+  error: string;
+  disabled: boolean;
+}
 
 export function useResourceSync(
   load: () => Promise<void>,
-  target: () => { account_id?: number | null; resource_id?: number },
+  target: () => {
+    account_id?: number | null;
+    resource_id?: number;
+    resource_ids?: number[];
+  },
   cache: Ref<ResourceCache | undefined>,
 ) {
   const syncing = ref(false),
-    syncStatus = ref(""),
-    syncError = ref("");
-  let active = true;
+    error = ref(""),
+    results = ref<RefreshResult[]>([]);
+  const now = ref(Date.now()),
+    startedAt = ref(0),
+    completedAt = ref(0);
+  let active = true,
+    generation = 0;
   let pollTimer: ReturnType<typeof setTimeout> | undefined;
+  const clock = setInterval(() => {
+    now.value = Date.now();
+  }, 1000);
+  watch(cache, () => {
+    now.value = Date.now();
+  });
 
-  async function refresh() {
-    if (!active || syncing.value || document.hidden) return;
+  function reset() {
+    generation++;
+    clearTimeout(pollTimer);
+    syncing.value = false;
+    error.value = "";
+    results.value = [];
+    completedAt.value = 0;
+  }
+  // 翻页或切换筛选范围后，不把上一批任务的结果显示成当前页的结果。
+  watch(() => {
+    const scope = target();
+    return JSON.stringify({
+      ...scope,
+      resource_ids: scope.resource_ids?.slice().sort((a, b) => a - b),
+    });
+  }, reset);
+
+  async function refresh(onlyFailed = false) {
+    if (!active || syncing.value) return;
+    const selection = { ...target() };
+    if (onlyFailed)
+      selection.resource_ids = results.value
+        .filter((r) => r.status === "failed")
+        .map((r) => r.resource_id);
+    if (selection.resource_ids?.length === 0) return;
+    if (onlyFailed) delete selection.resource_id;
+    const run = ++generation;
     syncing.value = true;
-    syncError.value = "";
-    syncStatus.value = "正在请求更新…";
+    error.value = "";
+    results.value = [];
+    completedAt.value = 0;
+    startedAt.value = now.value = Date.now();
     try {
-      const result = await api<Progress>("/resources/sync", "POST", target());
-      if (!active) return;
-      if (!result.tasks.length) {
-        syncing.value = false;
-        syncStatus.value = "没有已启用的授权云账号";
-        await load();
-        return;
-      }
-      await poll(result.tasks.map((task) => task.id));
+      const response = await api<Progress>(
+        "/resources/sync",
+        "POST",
+        selection,
+      );
+      if (!active || run !== generation) return;
+      if (!response.tasks.length) throw new Error("没有可刷新的实例");
+      await poll(
+        response.tasks.map((task) => task.id),
+        run,
+      );
     } catch (e) {
-      if (!active) return;
+      if (!active || run !== generation) return;
       syncing.value = false;
-      syncStatus.value = "更新失败";
-      syncError.value = (e as Error).message;
+      error.value = (e as Error).message;
     }
   }
 
-  async function poll(ids: number[]) {
-    if (!active) return;
+  async function poll(ids: number[], run: number) {
     try {
       const { tasks } = await api<Progress>("/sync-tasks?ids=" + ids.join(","));
-      if (!active) return;
-      const pending = tasks.some(
-        (task) => !["succeeded", "failed"].includes(task.status),
-      );
-      if (pending) {
-        syncStatus.value = tasks.some((task) => task.status === "submitting")
-          ? "正在更新云端数据…"
-          : "同步排队中…";
-        pollTimer = setTimeout(() => void poll(ids), 2000);
+      if (!active || run !== generation) return;
+      if (tasks.length !== ids.length)
+        throw new Error("刷新任务不存在或已过期");
+      if (
+        tasks.some((task) => !["succeeded", "failed"].includes(task.status))
+      ) {
+        pollTimer = setTimeout(() => void poll(ids, run), 2000);
         return;
       }
-      // 只有任务完成才读取新快照，避免把旧数据误报为已更新。
+      // 完成前一直展示原快照；结束后读取成功项，失败项由后端保留旧数据。
       await load();
-      if (!active) return;
-      syncError.value = [
+      if (!active || run !== generation) return;
+      results.value = tasks.flatMap((task) => task.results || []);
+      error.value = [
         ...new Set(
           tasks
-            .filter((task) => task.status === "failed")
-            .map((task) => task.error || "云端同步失败"),
+            .filter(
+              (task) =>
+                task.status === "failed" &&
+                !task.results?.some((result) => result.status === "failed"),
+            )
+            .map((task) => task.error || "刷新失败，无法确认结果"),
         ),
       ].join("；");
-      syncStatus.value = syncError.value
-        ? "部分或全部更新失败"
-        : "已更新 " + new Date().toLocaleTimeString("zh-CN", { hour12: false });
+      completedAt.value = now.value = Date.now();
       syncing.value = false;
     } catch (e) {
-      if (!active) return;
+      if (!active || run !== generation) return;
       syncing.value = false;
-      syncStatus.value = "无法确认更新结果";
-      syncError.value = (e as Error).message;
+      error.value = "无法确认刷新结果：" + (e as Error).message;
     }
   }
 
-  const now = ref(Date.now());
-  let expiry: ReturnType<typeof setTimeout> | undefined;
-  watch(
-    cache,
-    (value) => {
-      clearTimeout(expiry);
-      now.value = Date.now();
-      if (value?.updated_at) {
-        const delay =
-          Date.parse(value.updated_at) + value.ttl_seconds * 1000 - now.value;
-        if (delay > 0)
-          expiry = setTimeout(() => {
-            now.value = Date.now();
-          }, delay);
-      }
-    },
-    { immediate: true },
+  const sampledAt = computed(() =>
+    cache.value?.sampled_at ? Date.parse(cache.value.sampled_at) : 0,
   );
-  const cacheLabel = computed(() => {
-    const value = cache.value;
-    if (!value?.updated_at) return "尚未成功更新";
-    const expired =
-      now.value - Date.parse(value.updated_at) >= value.ttl_seconds * 1000;
-    return (
-      "更新时间 " +
-      new Date(value.updated_at).toLocaleString("zh-CN", { hour12: false }) +
-      (expired ? " · 缓存已过期" : " · 缓存有效")
-    );
+  const age = computed(() => Math.max(0, now.value - sampledAt.value));
+  const relativeTime = computed(() => {
+    const minutes = Math.floor(age.value / 60000);
+    if (minutes < 1) return "刚刚";
+    if (minutes < 60) return `${minutes} 分钟前`;
+    return `${Math.floor(minutes / 60)} 小时${minutes % 60 ? ` ${minutes % 60} 分钟` : ""}前`;
+  });
+  const expired = computed(
+    () =>
+      sampledAt.value > 0 &&
+      age.value >= (cache.value?.stale_after_seconds || 600) * 1000,
+  );
+  const formatTime = (stamp: number) =>
+    new Date(stamp).toLocaleTimeString("zh-CN", {
+      hour12: false,
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  const syncState = computed<ResourceSyncState>(() => {
+    const succeeded = results.value.filter(
+      (r) => r.status === "succeeded",
+    ).length;
+    const skipped = results.value.filter((r) => r.status === "skipped").length;
+    const failed = results.value.filter((r) => r.status === "failed");
+    return {
+      loading: syncing.value,
+      expired: expired.value,
+      label: sampledAt.value
+        ? `${formatTime(sampledAt.value)} · ${relativeTime.value}`
+        : "尚无监控采样",
+      staleText: `监控数据已 ${Math.floor(age.value / 60000)} 分钟未刷新，下方为旧数据`,
+      elapsedSeconds: Math.max(
+        0,
+        Math.floor((now.value - startedAt.value) / 1000),
+      ),
+      success:
+        completedAt.value && !error.value && !expired.value
+          ? succeeded > 0
+            ? `${formatTime(completedAt.value)} · ${succeeded} 台实例刷新成功${skipped ? ` · ${skipped} 台已跳过` : ""}`
+            : skipped > 0
+              ? `${skipped} 台实例未运行或未启用监控，已跳过`
+              : ""
+          : "",
+      updated: succeeded > 0,
+      failures: failed,
+      error: error.value,
+      disabled: target().resource_ids?.length === 0,
+    };
   });
   onUnmounted(() => {
     active = false;
-    clearTimeout(expiry);
-    clearTimeout(pollTimer);
+    reset();
+    clearInterval(clock);
   });
-  return { refresh, syncing, syncStatus, syncError, cacheLabel };
+  return {
+    refresh: () => refresh(),
+    retryFailed: () => refresh(true),
+    syncState,
+  };
 }

@@ -24,8 +24,9 @@ func (t contextTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	return http.DefaultTransport.RoundTrip(r.WithContext(t.ctx))
 }
 
-// SDK 负责签名；只返回错误码，避免把凭证和请求正文写入任务或日志。
-func (a *Alibaba) call(ctx context.Context, ac CloudAccount, region, service, version, action string, params map[string]string) (map[string]any, error) {
+// SDK 负责签名；错误仅保留脱敏说明和接口上下文，不记录凭证或签名请求。
+func (a *Alibaba) call(ctx context.Context, ac CloudAccount, region, service, version, action string, params map[string]string) (_ map[string]any, returnedError error) {
+	defer func() { returnedError = reportCloudError(ctx, ac, region, service, action, returnedError) }()
 	id, e := Decrypt(a.Key, ac.SecretID)
 	if e != nil {
 		return nil, &CloudError{Code: "CredentialDecryptFailed", Definite: true}
@@ -57,16 +58,24 @@ func (a *Alibaba) call(ctx context.Context, ac CloudAccount, region, service, ve
 	if e != nil {
 		var se *sdkerrors.ServerError
 		if errors.As(e, &se) {
-			return nil, &CloudError{Code: se.ErrorCode(), RequestID: se.RequestId(), Definite: se.HttpStatus() >= 400 && se.HttpStatus() < 500 && se.HttpStatus() != 408}
+			return nil, &CloudError{Code: se.ErrorCode(), RequestID: se.RequestId(), Message: sanitizeCloudMessage(se.Message(), id, key), Definite: se.HttpStatus() >= 400 && se.HttpStatus() < 500 && se.HttpStatus() != 408}
 		}
-		return nil, &CloudError{Code: "CloudRequestFailed", Definite: false}
+		var ce *sdkerrors.ClientError
+		if errors.As(e, &ce) && ce.OriginError() != nil {
+			return nil, networkCloudError(ce.OriginError())
+		}
+		return nil, networkCloudError(e)
 	}
 	var body map[string]any
 	if json.Unmarshal([]byte(response.GetHttpContentString()), &body) != nil {
 		return nil, &CloudError{Code: "InvalidCloudResponse"}
 	}
 	if success, ok := body["Success"].(bool); ok && !success {
-		return nil, &CloudError{Code: str(body, "Code"), RequestID: str(body, "RequestId"), Definite: false}
+		message := str(body, "Message")
+		if message == "" {
+			message = str(body, "Msg")
+		}
+		return nil, &CloudError{Code: str(body, "Code"), RequestID: str(body, "RequestId"), Message: sanitizeCloudMessage(message, id, key), Definite: false}
 	}
 	return body, nil
 }
@@ -263,6 +272,9 @@ func (a *Alibaba) State(ctx context.Context, ac CloudAccount, r Resource) (Cloud
 }
 
 func (a *Alibaba) MonitorBatch(ctx context.Context, ac CloudAccount, rows []Resource, enabled []string) map[string]map[string]Metric {
+	if len(rows) > 0 && isDatabase(rows[0].Kind) {
+		return a.monitorDatabases(ctx, ac, rows)
+	}
 	out := map[string]map[string]Metric{}
 	if len(rows) == 0 {
 		return out

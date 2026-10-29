@@ -42,6 +42,7 @@ const actionLabels: Record<string, string> = {
   "accounts.delete": "删除云账号",
   "accounts.sync": "同步云账号",
   "resources.sync": "刷新资源",
+  "resources.monitor": "刷新实例监控",
   "resources.read": "查看资源",
   "monitor.read": "查看监控",
   "instances.start": "启动实例",

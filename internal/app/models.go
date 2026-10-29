@@ -54,28 +54,30 @@ type Metric struct {
 	Mount     string     `json:"mount,omitempty"`
 }
 type Resource struct {
-	Database        *DatabaseInfo     `json:"database,omitempty" gorm:"serializer:json;type:jsonb"`
-	ID              uint64            `json:"id"`
-	AccountID       uint64            `json:"account_id"`
-	Provider        string            `json:"provider"`
-	Kind            string            `json:"kind"`
-	Region          string            `json:"region"`
-	InstanceID      string            `json:"instance_id"`
-	Name            string            `json:"name"`
-	PublicIP        string            `json:"public_ip"`
-	PrivateIP       string            `json:"private_ip"`
-	Spec            string            `json:"spec"`
-	CPU             int               `json:"cpu"`
-	Memory          int               `json:"memory"`
-	Disk            int               `json:"disk"`
-	State           string            `json:"state"`
-	Tags            map[string]string `json:"tags" gorm:"serializer:json;type:jsonb"`
-	TagsError       string            `json:"tags_error"`
-	Metrics         map[string]Metric `json:"metrics" gorm:"serializer:json;type:jsonb"`
-	SyncedAt        time.Time         `json:"synced_at"`
-	AccountName     string            `json:"account_name" gorm:"-"`
-	AllowedActions  []string          `json:"allowed_actions" gorm:"-"`
-	OperationStatus string            `json:"operation_status" gorm:"-"`
+	MonitorPrefix     string            `json:"-" gorm:"-"`
+	Database          *DatabaseInfo     `json:"database,omitempty" gorm:"serializer:json;type:jsonb"`
+	ID                uint64            `json:"id"`
+	AccountID         uint64            `json:"account_id"`
+	Provider          string            `json:"provider"`
+	Kind              string            `json:"kind"`
+	Region            string            `json:"region"`
+	InstanceID        string            `json:"instance_id"`
+	Name              string            `json:"name"`
+	PublicIP          string            `json:"public_ip"`
+	PrivateIP         string            `json:"private_ip"`
+	Spec              string            `json:"spec"`
+	CPU               int               `json:"cpu"`
+	Memory            int               `json:"memory"`
+	Disk              int               `json:"disk"`
+	State             string            `json:"state"`
+	Tags              map[string]string `json:"tags" gorm:"serializer:json;type:jsonb"`
+	TagsError         string            `json:"tags_error"`
+	Metrics           map[string]Metric `json:"metrics" gorm:"serializer:json;type:jsonb"`
+	SyncedAt          time.Time         `json:"synced_at"`
+	AccountName       string            `json:"account_name" gorm:"-"`
+	AllowedActions    []string          `json:"allowed_actions" gorm:"-"`
+	OperationStatus   string            `json:"operation_status" gorm:"-"`
+	CanRefreshMonitor bool              `json:"can_refresh_monitor" gorm:"-"`
 }
 
 type DatabaseEndpoint struct {
@@ -108,28 +110,30 @@ type Audit struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 type Task struct {
-	ID                 uint64     `json:"id"`
-	ResourceID         *uint64    `json:"resource_id"`
-	AccountID          *uint64    `json:"account_id"`
-	AuditID            *uint64    `json:"audit_id"`
-	Action             string     `json:"action"`
-	Status             string     `json:"status"`
-	RequestID          string     `json:"request_id"`
-	Error              string     `json:"error"`
-	CreatedAt          time.Time  `json:"created_at"`
-	UpdatedAt          time.Time  `json:"updated_at"`
-	NextRun            time.Time  `json:"next_run"`
-	LeaseUntil         *time.Time `json:"-"`
-	BaselineState      string     `json:"-"`
-	ObservedTransition bool       `json:"-"`
+	ResourceIDs        []uint64        `json:"-" gorm:"serializer:json;type:jsonb"`
+	RefreshResults     []RefreshResult `json:"-" gorm:"serializer:json;type:jsonb"`
+	ID                 uint64          `json:"id"`
+	ResourceID         *uint64         `json:"resource_id"`
+	AccountID          *uint64         `json:"account_id"`
+	AuditID            *uint64         `json:"audit_id"`
+	Action             string          `json:"action"`
+	Status             string          `json:"status"`
+	RequestID          string          `json:"request_id"`
+	Error              string          `json:"error"`
+	CreatedAt          time.Time       `json:"created_at"`
+	UpdatedAt          time.Time       `json:"updated_at"`
+	NextRun            time.Time       `json:"next_run"`
+	LeaseUntil         *time.Time      `json:"-"`
+	BaselineState      string          `json:"-"`
+	ObservedTransition bool            `json:"-"`
 }
 type Settings struct {
-	ID             int      `json:"-"`
-	RefreshSeconds int      `json:"refresh_seconds"`
-	IdleMinutes    int      `json:"idle_minutes"`
-	MaxHours       int      `json:"max_hours"`
-	RetentionDays  int      `json:"retention_days"`
-	Metrics        []string `json:"metrics" gorm:"serializer:json;type:jsonb"`
+	ID            int      `json:"-"`
+	StaleMinutes  int      `json:"stale_minutes"`
+	IdleMinutes   int      `json:"idle_minutes"`
+	MaxHours      int      `json:"max_hours"`
+	RetentionDays int      `json:"retention_days"`
+	Metrics       []string `json:"metrics" gorm:"serializer:json;type:jsonb"`
 }
 type OAuthProvider struct {
 	ID           uint64 `json:"id"`
@@ -165,7 +169,6 @@ type OAuthBinding struct {
 	CSRF       string `json:"-"`
 	ExpiresAt  time.Time
 }
-
 type KeyCheck struct {
 	ID    int
 	Value string
@@ -173,5 +176,4 @@ type KeyCheck struct {
 
 func (OAuthProvider) TableName() string { return "oauth_providers" }
 func (OAuthState) TableName() string    { return "oauth_states" }
-
-func (OAuthBinding) TableName() string { return "oauth_bindings" }
+func (OAuthBinding) TableName() string  { return "oauth_bindings" }

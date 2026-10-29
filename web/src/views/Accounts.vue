@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, h, onMounted, reactive, ref } from "vue";
+import { computed, h, onMounted, onUnmounted, reactive, ref } from "vue";
 import {
   NButton,
   NDataTable,
@@ -28,6 +28,53 @@ const rows = ref<Account[]>([]),
   message = useMessage(),
   dialog = useDialog(),
   editing = ref<number | null>(null);
+const syncLog = ref<Account | null>(null),
+  syncLogOpen = ref(false);
+const pendingSync = ref<Record<number, number[]>>({});
+let syncPoll: ReturnType<typeof setTimeout> | undefined;
+let active = true;
+let polling = false;
+function showSyncLog(row: Account) {
+  syncLog.value = row;
+  syncLogOpen.value = true;
+}
+async function pollSync() {
+  if (!active || polling) return;
+  const ids = Object.values(pendingSync.value).flat();
+  if (!ids.length) return;
+  polling = true;
+  try {
+    const result = await api<{ tasks: { id: number; status: string }[] }>(
+      "/sync-tasks?ids=" + ids.join(","),
+    );
+    if (!active) return;
+    let finished = false;
+    for (const [accountID, taskIDs] of Object.entries(pendingSync.value)) {
+      if (
+        taskIDs.every((id) =>
+          result.tasks.some(
+            (task) =>
+              task.id === id && ["succeeded", "failed"].includes(task.status),
+          ),
+        )
+      ) {
+        delete pendingSync.value[Number(accountID)];
+        finished = true;
+      }
+    }
+    if (finished) await load();
+  } catch (e) {
+    if (!active) return;
+    pendingSync.value = {};
+    message.error("无法确认同步结果：" + (e as Error).message);
+  } finally {
+    polling = false;
+  }
+  if (active && Object.keys(pendingSync.value).length) {
+    clearTimeout(syncPoll);
+    syncPoll = setTimeout(() => void pollSync(), 2000);
+  }
+}
 const form = reactive({
   provider: "tencent",
   site: "china",
@@ -95,9 +142,16 @@ async function save() {
   }
 }
 async function sync(row: Account) {
+  if (pendingSync.value[row.id]) return;
   try {
-    await api(`/accounts/${row.id}/sync`, "POST");
+    const result = await api<{ tasks: { id: number }[] }>(
+      `/accounts/${row.id}/sync`,
+      "POST",
+    );
+    pendingSync.value[row.id] = result.tasks.map((task) => task.id);
     message.success("同步任务已加入队列");
+    clearTimeout(syncPoll);
+    syncPoll = setTimeout(() => void pollSync(), 1000);
   } catch (e) {
     message.error((e as Error).message);
   }
@@ -148,7 +202,23 @@ const columns: DataTableColumns<Account> = [
       h("div", [
         r.last_sync ? new Date(r.last_sync).toLocaleString() : "等待首次同步",
         r.sync_error
-          ? h("div", { class: "hint", style: "color:#b42318" }, r.sync_error)
+          ? h("div", { class: "row", style: "color:#b42318;gap:8px" }, [
+              h(
+                "span",
+                { class: "hint" },
+                `同步失败 · ${r.sync_error.split("\n").filter(Boolean).length} 条错误`,
+              ),
+              h(
+                NButton,
+                {
+                  text: true,
+                  size: "small",
+                  type: "error",
+                  onClick: () => showSyncLog(r),
+                },
+                () => "查看日志",
+              ),
+            ])
           : null,
       ]),
   },
@@ -161,8 +231,13 @@ const columns: DataTableColumns<Account> = [
         h(NButton, { size: "small", onClick: () => edit(r) }, () => "编辑"),
         h(
           NButton,
-          { size: "small", disabled: !r.enabled, onClick: () => sync(r) },
-          () => "同步资源",
+          {
+            size: "small",
+            disabled: !r.enabled || !!pendingSync.value[r.id],
+            loading: !!pendingSync.value[r.id],
+            onClick: () => sync(r),
+          },
+          () => (pendingSync.value[r.id] ? "同步中…" : "同步资源"),
         ),
         h(
           NButton,
@@ -180,6 +255,10 @@ const columns: DataTableColumns<Account> = [
   },
 ];
 onMounted(load);
+onUnmounted(() => {
+  active = false;
+  clearTimeout(syncPoll);
+});
 </script>
 <template>
   <div class="row spread" style="margin-bottom: 20px">
@@ -216,6 +295,38 @@ onMounted(load);
   <p class="hint">
     密钥加密保存，编辑时留空表示保持原凭证。停用账号后停止同步和新操作，已有资源记录仍保留用于查询。
   </p>
+  <n-modal v-model:show="syncLogOpen">
+    <n-card
+      class="sync-log-card"
+      :title="`${syncLog?.name || '云账号'} · 同步日志`"
+      :bordered="false"
+      role="dialog"
+      aria-modal="true"
+      aria-label="云账号同步日志"
+      closable
+      @close="syncLogOpen = false"
+    >
+      <p class="hint">
+        {{
+          syncLog?.last_sync
+            ? new Date(syncLog.last_sync).toLocaleString()
+            : "最近一次同步"
+        }}
+        ·
+        按失败阶段、资源类型和地域列出；权限提示还需结合资源范围及显式拒绝检查。
+      </p>
+      <ol class="sync-log-lines">
+        <li
+          v-for="(line, index) in syncLog?.sync_error
+            .split('\n')
+            .filter(Boolean)"
+          :key="index"
+        >
+          {{ line }}
+        </li>
+      </ol>
+    </n-card>
+  </n-modal>
   <n-modal v-model:show="modal" :mask-closable="!saving"
     ><n-card
       style="width: 550px; max-width: 94vw"
@@ -268,3 +379,22 @@ onMounted(load);
     ></n-modal
   >
 </template>
+<style scoped>
+.sync-log-card {
+  width: min(920px, calc(100vw - 32px));
+  max-height: 82vh;
+  overflow-y: auto;
+}
+.sync-log-lines {
+  margin: 16px 0 0;
+  padding-left: 24px;
+}
+.sync-log-lines li {
+  padding: 12px 0;
+  color: #8f1d14;
+  line-height: 1.8;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  border-bottom: 1px solid #eef0f4;
+}
+</style>

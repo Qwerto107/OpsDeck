@@ -108,12 +108,17 @@ func (a *App) resources(c *gin.Context) {
 		fail(c, 503, "无法读取缓存更新时间")
 		return
 	}
+	if a.monitorSample(&cache, filtered[start:end]) != nil {
+		fail(c, 503, "无法读取监控采样时间")
+		return
+	}
 	c.JSON(200, gin.H{"items": filtered[start:end], "total": total, "page": page, "page_size": size, "cache": cache})
 }
 func (a *App) presentResource(u User, r *Resource) {
 	r.AllowedActions = []string{}
 	var account CloudAccount
 	accountEnabled := a.DB.First(&account, r.AccountID).Error == nil && account.Enabled
+	r.CanRefreshMonitor = accountEnabled && canRefreshResource(u, *r)
 	var count int64
 	a.DB.Model(&Task{}).Where("resource_id = ? AND status IN ?", r.ID, []string{"queued", "submitting", "waiting", "unknown"}).Count(&count)
 	if count == 0 && accountEnabled && isServer(r.Kind) {
@@ -146,13 +151,12 @@ func (a *App) presentResource(u User, r *Resource) {
 		if strings.HasPrefix(key, "disk:") {
 			base = "disk"
 		}
-		if !enabled[base] {
+		if !isDatabase(r.Kind) && !enabled[base] {
 			delete(r.Metrics, key)
 			continue
 		}
-		if m.SampledAt != nil && time.Since(*m.SampledAt) > 5*time.Minute {
+		if m.SampledAt != nil && time.Since(*m.SampledAt) >= time.Duration(settings.StaleMinutes)*time.Minute {
 			m.Status = "stale"
-			m.Reason = "数据过期"
 			r.Metrics[key] = m
 		}
 	}
@@ -168,13 +172,17 @@ func (a *App) resourceDetail(c *gin.Context) {
 	a.DB.First(&ac, r.AccountID)
 	r.AccountName = ac.Name
 	var tasks []Task
-	if a.DB.Where("resource_id = ?", r.ID).Order("id desc").Limit(30).Find(&tasks).Error != nil {
+	if a.DB.Where("resource_id = ? AND action <> 'monitor'", r.ID).Order("id desc").Limit(30).Find(&tasks).Error != nil {
 		fail(c, 503, "操作记录暂不可用")
 		return
 	}
 	cache, err := a.resourceCache(u, []CloudAccount{ac}, ac.ID)
 	if err != nil {
 		fail(c, 503, "无法读取缓存更新时间")
+		return
+	}
+	if a.monitorSample(&cache, []Resource{r}) != nil {
+		fail(c, 503, "无法读取监控采样时间")
 		return
 	}
 	c.JSON(200, gin.H{"resource": r, "tasks": tasks, "cache": cache})
@@ -250,6 +258,9 @@ func (a *App) accounts(c *gin.Context) {
 			}
 		}
 		if allowed {
+			if !Can(u, "accounts.manage", nil) {
+				r.SyncError = ""
+			}
 			out = append(out, r)
 		}
 	}
@@ -265,8 +276,14 @@ func (a *App) syncAccount(c *gin.Context) {
 		bad(c, "云账号已停用")
 		return
 	}
-	if a.mutation(c, "accounts.sync", fmt.Sprint(ac.ID), func(tx *gorm.DB) error { return enqueueSync(tx, ac.ID) }) {
-		c.Status(202)
+	var task Task
+	if a.mutation(c, "accounts.sync", fmt.Sprint(ac.ID), func(tx *gorm.DB) error {
+		if err := enqueueSync(tx, ac.ID); err != nil {
+			return err
+		}
+		return tx.Where("account_id = ? AND action = 'sync'", ac.ID).Order("id desc").First(&task).Error
+	}) {
+		c.JSON(202, gin.H{"tasks": []syncProgress{accountSyncProgress(current(c), task)}})
 	}
 }
 func enqueueSync(tx *gorm.DB, id uint64) error {

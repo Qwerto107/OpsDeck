@@ -72,6 +72,9 @@ func (t *Tencent) listDatabases(ctx context.Context, ac CloudAccount, region, ki
 			}
 			r := databaseResource(ac, region, kind, id, name)
 			if kind == "mysql" {
+				if len(array(m, "ClusterInfo")) > 0 {
+					r.MonitorPrefix = "Cluster"
+				}
 				r.CPU = num(m, "Cpu")
 				r.Database.MemoryGB = float64(num(m, "Memory")) / 1024
 				r.Disk = num(m, "Volume")

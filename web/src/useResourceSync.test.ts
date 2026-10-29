@@ -1,97 +1,163 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ref } from "vue";
-import type { ResourceCache } from "./types";
+import { nextTick, ref } from "vue";
+import type { RefreshResult, ResourceCache } from "./types";
 import { useResourceSync } from "./useResourceSync";
 
-const hooks = vi.hoisted(() => ({
-  mounted: [] as (() => unknown)[],
-  unmounted: [] as (() => unknown)[],
-}));
+const hooks = vi.hoisted(() => ({ unmounted: [] as (() => unknown)[] }));
 const request = vi.hoisted(() => vi.fn());
 vi.mock("./api", () => ({ api: request }));
-vi.mock("./store", () => ({
-  useSession: () => ({ settings: { refresh_seconds: 60 } }),
-}));
 vi.mock("vue", async (original) => ({
   ...(await original<typeof import("vue")>()),
-  onMounted: (fn: () => unknown) => hooks.mounted.push(fn),
   onUnmounted: (fn: () => unknown) => hooks.unmounted.push(fn),
 }));
+const cacheAt = (minutes = 0): ResourceCache => ({
+  updated_at: new Date().toISOString(),
+  ttl_seconds: 180,
+  sampled_at: new Date(Date.now() - minutes * 60000).toISOString(),
+  stale_after_seconds: 600,
+});
+const result = (
+  id: number,
+  status: RefreshResult["status"],
+): RefreshResult => ({
+  resource_id: id,
+  name: `实例 ${id}`,
+  instance_id: `ins-${id}`,
+  status,
+  error: status === "failed" ? "云监控请求失败：UnauthorizedOperation" : "",
+});
 
 beforeEach(() => {
   vi.useFakeTimers();
-  hooks.mounted = [];
   hooks.unmounted = [];
   request.mockReset();
-  vi.stubGlobal("document", { hidden: false });
 });
 afterEach(() => {
   hooks.unmounted.forEach((fn) => fn());
   vi.useRealTimers();
-  vi.unstubAllGlobals();
 });
 
-describe("页面触发云端同步", () => {
-  it("手动触发任务，合并重复点击，完成后读取快照", async () => {
+describe("手动监控刷新", () => {
+  it("按实际采样时间提示过期，页面进入及过期不触发云请求", async () => {
+    const cache = ref(cacheAt());
+    const sync = useResourceSync(vi.fn(), () => ({ resource_ids: [1] }), cache);
+    expect(sync.syncState.value.label).toContain("刚刚");
+    await vi.advanceTimersByTimeAsync(600001);
+    expect(sync.syncState.value.expired).toBe(true);
+    expect(sync.syncState.value.label).toContain("10 分钟前");
+    expect(request).not.toHaveBeenCalled();
+    cache.value = { ...cacheAt(12), updated_at: new Date().toISOString() };
+    await nextTick();
+    expect(sync.syncState.value.expired).toBe(true);
+    expect(sync.syncState.value.staleText).toContain("12 分钟未刷新");
+  });
+  it("刷新中显示经过秒数，合并重复点击并保留原快照", async () => {
     const load = vi.fn().mockResolvedValue(undefined);
-    request
-      .mockResolvedValueOnce({
-        tasks: [{ id: 7, status: "queued", error: "" }],
-      })
-      .mockResolvedValueOnce({
-        tasks: [{ id: 7, status: "submitting", error: "" }],
-      })
-      .mockResolvedValueOnce({
-        tasks: [{ id: 7, status: "succeeded", error: "" }],
-      });
+    request.mockResolvedValue({ tasks: [{ id: 7, status: "submitting" }] });
     const sync = useResourceSync(
       load,
-      () => ({ account_id: 2 }),
-      ref<ResourceCache>(),
+      () => ({ resource_ids: [1] }),
+      ref(cacheAt(12)),
     );
     await sync.refresh();
-    expect(request).toHaveBeenCalledWith("/resources/sync", "POST", {
-      account_id: 2,
-    });
     await sync.refresh();
+    await vi.advanceTimersByTimeAsync(8000);
+    expect(sync.syncState.value.loading).toBe(true);
+    expect(sync.syncState.value.elapsedSeconds).toBe(8);
+    expect(load).not.toHaveBeenCalled();
     expect(
       request.mock.calls.filter(([path]) => path === "/resources/sync"),
     ).toHaveLength(1);
-    expect(load).not.toHaveBeenCalled();
+    request.mockResolvedValue({
+      tasks: [
+        { id: 7, status: "succeeded", results: [result(1, "succeeded")] },
+      ],
+    });
     await vi.advanceTimersByTimeAsync(2000);
     expect(load).toHaveBeenCalledTimes(1);
-    expect(sync.syncing.value).toBe(false);
-    expect(sync.syncError.value).toBe("");
+    expect(sync.syncState.value.loading).toBe(false);
+    expect(sync.syncState.value.error).toBe("");
   });
-  it("进入页面和缓存过期不触发云请求，手动更新才回源", async () => {
-    const cache = ref<ResourceCache>({
-      updated_at: new Date().toISOString(),
-      ttl_seconds: 180,
-    });
-    const sync = useResourceSync(vi.fn(), () => ({}), cache);
-    hooks.mounted.forEach((fn) => fn());
-    expect(sync.cacheLabel.value).toContain("缓存有效");
-    await vi.advanceTimersByTimeAsync(180001);
-    expect(sync.cacheLabel.value).toContain("缓存已过期");
-    expect(request).not.toHaveBeenCalled();
-    request.mockResolvedValue({ tasks: [] });
-    await sync.refresh();
-    expect(request).toHaveBeenCalledWith("/resources/sync", "POST", {});
-  });
-  it("同步失败显示原因，不冒充更新成功", async () => {
+  it("根据实例结果统计成功数量，仅重试失败项", async () => {
     request
       .mockResolvedValueOnce({ tasks: [{ id: 8, status: "queued" }] })
       .mockResolvedValueOnce({
-        tasks: [{ id: 8, status: "failed", error: "地域查询失败" }],
+        tasks: [
+          {
+            id: 8,
+            status: "failed",
+            results: [
+              result(1, "succeeded"),
+              result(2, "failed"),
+              result(3, "failed"),
+            ],
+          },
+        ],
       });
     const sync = useResourceSync(
       vi.fn().mockResolvedValue(undefined),
-      () => ({}),
-      ref<ResourceCache>(),
+      () => ({ resource_ids: [1, 2, 3] }),
+      ref(cacheAt()),
     );
     await sync.refresh();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(sync.syncError.value).toBe("地域查询失败");
-    expect(sync.syncStatus.value).toContain("失败");
+    expect(sync.syncState.value.failures.map((r) => r.resource_id)).toEqual([
+      2, 3,
+    ]);
+    expect(sync.syncState.value.success).toContain("1 台实例刷新成功");
+    request
+      .mockResolvedValueOnce({ tasks: [{ id: 9, status: "queued" }] })
+      .mockResolvedValueOnce({
+        tasks: [
+          {
+            id: 9,
+            status: "succeeded",
+            results: [result(2, "succeeded"), result(3, "succeeded")],
+          },
+        ],
+      });
+    await sync.retryFailed();
+    expect(request).toHaveBeenCalledWith("/resources/sync", "POST", {
+      resource_ids: [2, 3],
+    });
+    expect(sync.syncState.value.failures).toHaveLength(0);
+    expect(sync.syncState.value.success).toContain("2 台实例刷新成功");
+  });
+  it("翻页和离开页面后忽略上一批结果，空页面不创建任务", async () => {
+    const ids = ref<number[]>([]),
+      load = vi.fn();
+    const sync = useResourceSync(
+      load,
+      () => ({ resource_ids: ids.value }),
+      ref(cacheAt()),
+    );
+    expect(sync.syncState.value.disabled).toBe(true);
+    await sync.refresh();
+    expect(request).not.toHaveBeenCalled();
+    ids.value = [1];
+    await nextTick();
+    request.mockResolvedValue({ tasks: [{ id: 7, status: "submitting" }] });
+    await sync.refresh();
+    ids.value = [2];
+    await nextTick();
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(sync.syncState.value.loading).toBe(false);
+    expect(load).not.toHaveBeenCalled();
+    hooks.unmounted.forEach((fn) => fn());
+    expect(vi.getTimerCount()).toBe(0);
+  });
+  it("轮询中断时不冒充成功，不清空已有数据", async () => {
+    const load = vi.fn();
+    request
+      .mockResolvedValueOnce({ tasks: [{ id: 8, status: "queued" }] })
+      .mockRejectedValueOnce(new Error("连接中断"));
+    const sync = useResourceSync(
+      load,
+      () => ({ resource_ids: [1] }),
+      ref(cacheAt()),
+    );
+    await sync.refresh();
+    expect(sync.syncState.value.error).toContain("无法确认刷新结果");
+    expect(sync.syncState.value.success).toBe("");
+    expect(load).not.toHaveBeenCalled();
   });
 });

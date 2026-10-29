@@ -25,17 +25,16 @@ type Cloud interface {
 	MonitorBatch(context.Context, CloudAccount, []Resource, []string) map[string]map[string]Metric
 }
 type CloudError struct {
-	Code, RequestID string
-	Definite        bool
+	Code, RequestID                      string
+	Service, Action, Message, Permission string
+	Definite                             bool
 }
-
-func (e *CloudError) Error() string { return e.Code }
 
 type Tencent struct{ Key cipher.AEAD }
 
 func (t *Tencent) Regions(ctx context.Context, ac CloudAccount, kind string) ([]string, error) {
-	region := ""
 	service, version := "region", "2022-06-27"
+	region := ""
 	params := map[string]any{"Product": "cvm"}
 	if isDatabase(kind) {
 		product, _ := tencentDatabaseProduct(kind)
@@ -43,12 +42,12 @@ func (t *Tencent) Regions(ctx context.Context, ac CloudAccount, kind string) ([]
 	}
 	if kind == "postgresql" {
 		service, version = tencentDatabaseProduct(kind)
+		params = map[string]any{}
 		// PostgreSQL 地域发现需指定请求地域，该入口不限制返回的地域列表。
 		region = "ap-guangzhou"
 		if ac.Site == "international" {
 			region = "ap-singapore"
 		}
-		params = map[string]any{}
 	}
 	if kind == "lighthouse" {
 		service, version = cloudProduct(kind)
@@ -82,7 +81,8 @@ func availableRegions(body map[string]any) ([]string, error) {
 	return regions, nil
 }
 
-func (t *Tencent) call(ctx context.Context, ac CloudAccount, region, service, version, action string, params map[string]any) (map[string]any, error) {
+func (t *Tencent) call(ctx context.Context, ac CloudAccount, region, service, version, action string, params map[string]any) (_ map[string]any, returnedError error) {
+	defer func() { returnedError = reportCloudError(ctx, ac, region, service, action, returnedError) }()
 	id, e := Decrypt(t.Key, ac.SecretID)
 	if e != nil {
 		return nil, &CloudError{Code: "CredentialDecryptFailed", Definite: true}
@@ -110,9 +110,9 @@ func (t *Tencent) call(ctx context.Context, ac CloudAccount, region, service, ve
 	if e = client.Send(request, response); e != nil {
 		var ce *sdkerrors.TencentCloudSDKError
 		if errors.As(e, &ce) {
-			return nil, &CloudError{Code: ce.GetCode(), RequestID: ce.GetRequestId(), Definite: !strings.HasPrefix(ce.GetCode(), "ClientError.")}
+			return nil, &CloudError{Code: ce.GetCode(), RequestID: ce.GetRequestId(), Message: sanitizeCloudMessage(ce.GetMessage(), id, key), Definite: !strings.HasPrefix(ce.GetCode(), "ClientError.")}
 		}
-		return nil, &CloudError{Code: "CloudRequestFailed", Definite: false}
+		return nil, networkCloudError(e)
 	}
 	var body struct{ Response map[string]any }
 	if json.Unmarshal(response.GetBody(), &body) != nil || body.Response == nil {
@@ -251,18 +251,51 @@ func (t *Tencent) MonitorBatch(ctx context.Context, ac CloudAccount, rows []Reso
 		return out
 	}
 	region, kind := rows[0].Region, rows[0].Kind
+	if kind == "mysql" {
+		// 云盘架构的指标使用 Cluster 前缀，不能与普通实例放入同一批查询。
+		groups := map[string][]Resource{}
+		for _, r := range rows {
+			groups[r.MonitorPrefix] = append(groups[r.MonitorPrefix], r)
+		}
+		if len(groups) > 1 {
+			for _, group := range groups {
+				for id, metrics := range t.MonitorBatch(ctx, ac, group, enabled) {
+					out[id] = metrics
+				}
+			}
+			return out
+		}
+	}
 	namespace := "QCE/CVM"
+	dimension := "InstanceId"
 	names := map[string]string{"cpu": "CPUUsage", "memory": "MemUsage", "network_in": "WanIntraffic", "network_out": "WanOuttraffic", "disk": "CvmDiskUsage"}
 	if kind == "lighthouse" {
 		namespace = "QCE/LIGHTHOUSE"
 		names = map[string]string{"cpu": "CpuUsage", "memory": "MemUsage", "network_in": "LighthouseIntraffic", "network_out": "LighthouseOuttraffic", "disk": "DiskUsage"}
 	}
+	if kind == "mysql" {
+		namespace = "QCE/CDB"
+		names = map[string]string{"cpu": "CpuUseRate", "memory": "MemoryUseRate", "disk": "VolumeRate", "connections": "ThreadsConnected"}
+		for key, name := range names {
+			names[key] = rows[0].MonitorPrefix + name
+		}
+	}
+	if kind == "postgresql" {
+		namespace, dimension = "QCE/POSTGRES", "resourceId"
+		names = map[string]string{"cpu": "Cpu", "memory": "MemoryRate", "disk": "StorageRate", "connections": "Connections"}
+	}
 	running := []string{}
 	for _, r := range rows {
-		out[r.InstanceID] = map[string]Metric{"disk:mounts": {Status: "unavailable", Reason: fmt.Sprintf("%s 云监控当前查询未提供挂载点明细", kind)}}
+		out[r.InstanceID] = map[string]Metric{}
+		if !isDatabase(kind) {
+			out[r.InstanceID]["disk:mounts"] = Metric{Status: "unavailable", Reason: fmt.Sprintf("%s 云监控当前查询未提供挂载点明细", kind)}
+		}
 		valid := r.AccountID == ac.ID && r.Region == region && r.Kind == kind
 		for _, key := range enabled {
 			unit := "%"
+			if key == "connections" {
+				unit = "个"
+			}
 			if strings.HasPrefix(key, "network_") {
 				unit = "Mbps"
 				if kind == "lighthouse" {
@@ -291,13 +324,16 @@ func (t *Tencent) MonitorBatch(ctx context.Context, ac CloudAccount, rows []Reso
 		ids := running[start:min(start+50, len(running))]
 		instances := make([]any, 0, len(ids))
 		for _, id := range ids {
-			instances = append(instances, map[string]any{"Dimensions": []any{map[string]any{"Name": "InstanceId", "Value": id}}})
+			instances = append(instances, map[string]any{"Dimensions": []any{map[string]any{"Name": dimension, "Value": id}}})
 		}
 		requested := map[string]bool{}
 		for _, id := range ids {
 			requested[id] = true
 		}
 		for _, key := range enabled {
+			if names[key] == "" {
+				continue
+			}
 			body, err := t.call(ctx, ac, region, "monitor", "2018-07-24", "GetMonitorData", map[string]any{"Namespace": namespace, "MetricName": names[key], "Period": 60, "StartTime": end.Add(-5 * time.Minute).Format(time.RFC3339), "EndTime": end.Format(time.RFC3339), "Instances": instances})
 			if err != nil {
 				for _, id := range ids {
@@ -316,7 +352,7 @@ func (t *Tencent) MonitorBatch(ctx context.Context, ac CloudAccount, rows []Reso
 				}
 				id := ""
 				for _, d := range array(dp, "Dimensions") {
-					if dim, ok := d.(map[string]any); ok && str(dim, "Name") == "InstanceId" {
+					if dim, ok := d.(map[string]any); ok && str(dim, "Name") == dimension {
 						id = str(dim, "Value")
 					}
 				}
@@ -339,7 +375,7 @@ func (t *Tencent) MonitorBatch(ctx context.Context, ac CloudAccount, rows []Reso
 				m.SampledAt = &sampled
 				m.Status = "ok"
 				m.Reason = ""
-				if key == "disk" {
+				if key == "disk" && !isDatabase(kind) {
 					m.Reason = "云端实例级空间使用率；未返回挂载点明细"
 				}
 				out[id][key] = m

@@ -3,9 +3,12 @@ import { onMounted, ref } from "vue";
 import { useRoute, RouterLink } from "vue-router";
 import { NAlert, NButton, NEmpty, NSkeleton } from "naive-ui";
 import { api } from "../api";
+import { databaseMetrics } from "../clouds";
 import { useResourceSync } from "../useResourceSync";
 import type { Resource, ResourceCache } from "../types";
 import StatusBadge from "../components/StatusBadge.vue";
+import ResourceSyncControl from "../components/ResourceSyncControl.vue";
+import MetricValue from "../components/MetricValue.vue";
 const route = useRoute(),
   resource = ref<Resource | null>(null),
   cache = ref<ResourceCache>(),
@@ -27,9 +30,13 @@ async function load() {
     busy.value = false;
   }
 }
-const { refresh, syncing, syncStatus, syncError, cacheLabel } = useResourceSync(
+const { refresh, retryFailed, syncState } = useResourceSync(
   load,
-  () => ({ resource_id: Number(route.params.id) }),
+  () => ({
+    resource_ids: resource.value?.can_refresh_monitor
+      ? [Number(route.params.id)]
+      : [],
+  }),
   cache,
 );
 const networkLabels: Record<string, string> = {
@@ -47,12 +54,6 @@ onMounted(load);
     class="error-banner"
     style="margin-top: 16px"
     >{{ error }} <n-button text @click="load">重试</n-button></n-alert
-  ><n-alert v-if="syncError" type="warning" class="error-banner">{{
-    syncError
-  }}</n-alert
-  ><n-alert v-if="syncStatus" type="info" class="error-banner">{{
-    syncStatus
-  }}</n-alert
   ><n-skeleton
     v-if="busy && !resource"
     height="260px"
@@ -67,10 +68,6 @@ onMounted(load);
             <StatusBadge :value="resource.state" />
           </div>
           <p class="muted mono">{{ resource.instance_id }}</p>
-        </div>
-        <div class="row wrap">
-          <span class="muted small">{{ cacheLabel }}</span
-          ><n-button :loading="syncing" @click="refresh">更新</n-button>
         </div>
       </div>
     </div>
@@ -107,6 +104,29 @@ onMounted(load);
         </dd>
         <dt>快照时间</dt>
         <dd>{{ new Date(resource.synced_at).toLocaleString() }}</dd>
+      </dl>
+    </div>
+    <div class="panel">
+      <div class="row spread wrap">
+        <h2>资源使用情况</h2>
+        <ResourceSyncControl compact :state="syncState" @refresh="refresh" />
+      </div>
+      <ResourceSyncControl
+        mode="notice"
+        :state="syncState"
+        @refresh="refresh"
+        @retry="retryFailed"
+      />
+      <dl class="database-usage">
+        <div v-for="metric in databaseMetrics" :key="metric.key">
+          <dt>{{ metric.label }}</dt>
+          <dd>
+            <MetricValue
+              :metric="resource.metrics?.[metric.key]"
+              :bar="metric.key !== 'connections'"
+            />
+          </dd>
+        </div>
       </dl>
     </div>
     <div class="panel">
@@ -153,5 +173,23 @@ onMounted(load);
 }
 .panel h2 {
   font-size: 14px;
+}
+.database-usage {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 24px;
+  margin: 20px 0 0;
+}
+.database-usage dt {
+  color: #667085;
+  margin-bottom: 12px;
+}
+.database-usage dd {
+  margin: 0;
+}
+@media (max-width: 720px) {
+  .database-usage {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 </style>

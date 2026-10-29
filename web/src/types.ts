@@ -56,6 +56,7 @@ export interface Resource {
   metrics: Record<string, Metric>;
   synced_at: string;
   allowed_actions: string[];
+  can_refresh_monitor?: boolean;
 }
 export interface Account {
   site: string;
@@ -68,7 +69,7 @@ export interface Account {
   sync_error: string;
 }
 export interface Settings {
-  refresh_seconds: number;
+  stale_minutes: number;
   idle_minutes: number;
   max_hours: number;
   retention_days: number;
@@ -126,4 +127,14 @@ export interface Page<T> {
 export interface ResourceCache {
   updated_at: string | null;
   ttl_seconds: number;
+  sampled_at?: string | null;
+  stale_after_seconds?: number;
+}
+
+export interface RefreshResult {
+  resource_id: number;
+  name: string;
+  instance_id: string;
+  status: "succeeded" | "failed" | "skipped";
+  error: string;
 }

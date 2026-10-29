@@ -3,14 +3,7 @@ import { computed } from "vue";
 import { NTooltip } from "naive-ui";
 import type { Metric } from "../types";
 const props = defineProps<{ metric?: Metric; bar?: boolean }>();
-const stale = computed(
-  () =>
-    props.metric?.status === "stale" ||
-    !!(
-      props.metric?.sampled_at &&
-      Date.now() - Date.parse(props.metric.sampled_at) > 300000
-    ),
-);
+const stale = computed(() => props.metric?.status === "stale");
 const time = computed(() =>
   props.metric?.sampled_at
     ? new Date(props.metric.sampled_at).toLocaleString("zh-CN", {

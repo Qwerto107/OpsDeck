@@ -83,6 +83,8 @@ func TestPostgresDatabaseResourcesAreScopedAndReadOnly(t *testing.T) {
 	r.Database.Version = "8.0"
 	r.Database.MemoryGB = 0.5
 	r.Database.Endpoints = []DatabaseEndpoint{{Address: "db.example.test", Port: 3306, Network: "private"}}
+	value := 7.0
+	r.Metrics = map[string]Metric{"connections": {Value: &value, Unit: "个", Status: "ok"}}
 	if err := a.DB.Create(&r).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -102,6 +104,9 @@ func TestPostgresDatabaseResourcesAreScopedAndReadOnly(t *testing.T) {
 	if page.Total != 1 || len(page.Items[0].AllowedActions) != 0 || page.Items[0].Database.MemoryGB != 0.5 {
 		t.Fatal("数据库列表或快照字段错误")
 	}
+	if page.Items[0].Metrics["connections"].Value == nil {
+		t.Fatal("数据库连接数被服务器指标设置过滤")
+	}
 	w = sendRequest(a, "GET", "/api/resources?category=server", nil, cookie, "")
 	requireCode(t, w, 200)
 	_ = json.Unmarshal(w.Body.Bytes(), &page)
@@ -115,6 +120,18 @@ func TestPostgresDatabaseResourcesAreScopedAndReadOnly(t *testing.T) {
 	}
 	limited, _ := loginTest(t, a, u.Username)
 	requireCode(t, sendRequest(a, "GET", "/api/resources/"+fmtID(r.ID), nil, limited, ""), 403)
+	dbRole := Role{Name: "database-config-only", Permissions: []string{"resources.read"}, Scopes: []Scope{{AccountID: ac.ID, Kind: "mysql"}}}
+	dbUser := User{Username: "db-config-only", PasswordHash: admin.PasswordHash, Enabled: true, Preferences: map[string]any{}, Roles: []Role{dbRole}}
+	if err := a.DB.Create(&dbUser).Error; err != nil {
+		t.Fatal(err)
+	}
+	dbCookie, _ := loginTest(t, a, dbUser.Username)
+	w = sendRequest(a, "GET", "/api/resources/"+fmtID(r.ID), nil, dbCookie, "")
+	requireCode(t, w, 200)
+	var detail struct{ Resource Resource }
+	if err := json.Unmarshal(w.Body.Bytes(), &detail); err != nil || len(detail.Resource.Metrics) != 0 {
+		t.Fatal("无监控权限的用户获得了数据库指标")
+	}
 	task := Task{AccountID: &ac.ID, ResourceID: &r.ID, Action: "reboot", Status: "queued", NextRun: time.Now()}
 	if err := a.DB.Create(&task).Error; err != nil {
 		t.Fatal(err)

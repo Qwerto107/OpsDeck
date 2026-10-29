@@ -5,8 +5,8 @@ import (
 	"errors"
 	"log/slog"
 	"sort"
+	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"gorm.io/gorm"
@@ -70,6 +70,9 @@ func (a *App) cleanup() {
 	}
 }
 func (a *App) finish(task Task, status, message, requestID string) {
+	if status == "failed" {
+		slog.Error("task failed", "task_id", task.ID, "account_id", task.AccountID, "resource_id", task.ResourceID, "action", task.Action, "detail", message, "cloud_request_id", requestID)
+	}
 	e := a.DB.Transaction(func(tx *gorm.DB) error {
 		values := map[string]any{"status": status, "error": message, "lease_until": nil, "next_run": time.Now().Add(15 * time.Second), "updated_at": time.Now()}
 		if requestID != "" {
@@ -90,12 +93,17 @@ func (a *App) finish(task Task, status, message, requestID string) {
 		return nil
 	})
 	if e != nil {
-		slog.Error("task state persist failed", "task_id", task.ID)
+		slog.Error("task state persist failed", "task_id", task.ID, "error_code", "TaskStatePersistFailed")
 	}
 }
 func (a *App) process(parent context.Context, task Task) {
+	parent = context.WithValue(parent, cloudTaskContextKey{}, task.ID)
 	ctx, cancel := context.WithTimeout(parent, 5*time.Minute)
 	defer cancel()
+	if task.Action == "monitor" {
+		a.refreshMonitor(ctx, task)
+		return
+	}
 	var ac CloudAccount
 	if task.AccountID == nil || a.DB.First(&ac, *task.AccountID).Error != nil {
 		a.finish(task, "failed", "云账号不存在或已停用", task.RequestID)
@@ -126,9 +134,9 @@ func (a *App) process(parent context.Context, task Task) {
 	state, e := a.Cloud.State(ctx, ac, r)
 	if e != nil {
 		if task.Status == "queued" {
-			a.finish(task, "failed", "无法校验云端实例状态", task.RequestID)
+			a.finish(task, "failed", "无法校验云端实例状态；"+syncFailure("状态查询", r.Kind, r.Region, e), task.RequestID)
 		} else {
-			a.finish(task, "unknown", "无法查询云端结果，将继续核对", task.RequestID)
+			a.finish(task, "unknown", "无法查询云端结果，将继续核对；"+syncFailure("状态查询", r.Kind, r.Region, e), task.RequestID)
 		}
 		return
 	}
@@ -156,9 +164,9 @@ func (a *App) process(parent context.Context, task Task) {
 		if err != nil {
 			var ce *CloudError
 			if errors.As(err, &ce) && ce.Definite {
-				a.finish(task, "failed", ce.Code, ce.RequestID)
+				a.finish(task, "failed", ce.Error(), ce.RequestID)
 			} else {
-				a.finish(task, "unknown", "请求结果不明，将继续核对；不会自动重复提交", id)
+				a.finish(task, "unknown", "请求结果不明，将继续核对；不会自动重复提交；"+syncFailure("提交操作", r.Kind, r.Region, err), id)
 			}
 			return
 		}
@@ -196,13 +204,23 @@ func (a *App) process(parent context.Context, task Task) {
 func (a *App) syncResources(ctx context.Context, task Task, ac CloudAccount) {
 	settings, e := a.settings()
 	if e != nil {
+		slog.ErrorContext(ctx, "cloud resource sync failed", "task_id", task.ID, "account_id", ac.ID, "stage", "读取监控设置", "error_code", "SettingsReadFailed")
 		a.finish(task, "failed", "无法读取监控设置", "")
 		return
 	}
 	if e = a.DB.Model(&task).Update("status", "submitting").Error; e != nil {
+		slog.ErrorContext(ctx, "cloud resource sync failed", "task_id", task.ID, "account_id", ac.ID, "stage", "保存任务状态", "error_code", "TaskStatePersistFailed")
 		return
 	}
-	var errorsFound atomic.Bool
+	issues := []string{}
+	var issueMu sync.Mutex
+	report := func(stage, kind, region string, err error) {
+		detail := syncFailure(stage, kind, region, err)
+		issueMu.Lock()
+		issues = append(issues, strings.Split(detail, "\n")...)
+		issueMu.Unlock()
+		slog.ErrorContext(ctx, "cloud resource sync failed", "task_id", task.ID, "account_id", ac.ID, "provider", ac.Provider, "site", ac.Site, "stage", stage, "kind", kind, "region", region, "detail", detail)
+	}
 	discovered := map[string]bool{}
 	discoveryFailed := false
 	var pending sync.WaitGroup
@@ -211,7 +229,7 @@ func (a *App) syncResources(ctx context.Context, task Task, ac CloudAccount) {
 	for _, kind := range a.Cloud.Kinds(ac) {
 		regions, err := a.Cloud.Regions(ctx, ac, kind)
 		if err != nil {
-			errorsFound.Store(true)
+			report("地域发现", kind, "", err)
 			discoveryFailed = true
 			continue
 		}
@@ -221,7 +239,7 @@ func (a *App) syncResources(ctx context.Context, task Task, ac CloudAccount) {
 			select {
 			case slots <- struct{}{}:
 			case <-ctx.Done():
-				errorsFound.Store(true)
+				report("等待资源查询", kind, region, ctx.Err())
 				discoveryFailed = true
 				break regionsLoop
 			}
@@ -230,7 +248,7 @@ func (a *App) syncResources(ctx context.Context, task Task, ac CloudAccount) {
 				defer pending.Done()
 				defer func() { <-slots }()
 				if err := a.syncRegion(ctx, ac, region, kind, settings.Metrics); err != nil {
-					errorsFound.Store(true)
+					report("资源同步", kind, region, err)
 				}
 			}(region, kind)
 		}
@@ -248,15 +266,19 @@ func (a *App) syncResources(ctx context.Context, task Task, ac CloudAccount) {
 	}
 	sort.Strings(ac.Regions)
 	if a.DB.Model(&ac).Select("Regions").Updates(&ac).Error != nil {
-		errorsFound.Store(true)
+		report("保存地域", "all", "", &CloudError{Code: "RegionPersistFailed", Message: "数据库地域记录写入失败"})
 	}
 	message := ""
 	status := "succeeded"
-	if errorsFound.Load() {
-		message = "地域发现或部分资源同步失败，请检查云账号的地域查询、资源查询权限或云接口状态"
+	if len(issues) > 0 {
+		sort.Strings(issues)
+		message = strings.Join(issues, "\n")
 		status = "failed"
 	}
-	a.DB.Model(&ac).Updates(map[string]any{"last_sync": time.Now(), "sync_error": message})
+	if a.DB.Model(&ac).Updates(map[string]any{"last_sync": time.Now(), "sync_error": message}).Error != nil {
+		report("保存同步结果", "all", "", &CloudError{Code: "SyncResultPersistFailed", Message: "数据库同步结果写入失败"})
+		message, status = strings.Join(issues, "\n"), "failed"
+	}
 	a.finish(task, status, message, "")
 }
 
@@ -265,9 +287,18 @@ func (a *App) syncRegion(ctx context.Context, ac CloudAccount, region, kind stri
 	if err != nil {
 		return err
 	}
-	metrics := map[string]map[string]Metric{}
-	if !isDatabase(kind) {
-		metrics = a.Cloud.MonitorBatch(ctx, ac, rows, enabled)
+	if isDatabase(kind) {
+		enabled = []string{"cpu", "memory", "disk", "connections"}
+	}
+	metrics := a.Cloud.MonitorBatch(ctx, ac, rows, enabled)
+	issues := []error{}
+	var previous []Resource
+	if a.DB.Where("account_id = ? AND region = ? AND kind = ?", ac.ID, region, kind).Find(&previous).Error != nil {
+		return &CloudError{Code: "SnapshotReadFailed", Message: "数据库资源快照读取失败"}
+	}
+	oldMetrics := map[string]map[string]Metric{}
+	for _, r := range previous {
+		oldMetrics[r.InstanceID] = r.Metrics
 	}
 	ids := make([]string, 0, len(rows))
 	for _, r := range rows {
@@ -276,8 +307,28 @@ func (a *App) syncRegion(ctx context.Context, ac CloudAccount, region, kind stri
 		if r.Metrics == nil {
 			r.Metrics = map[string]Metric{}
 		}
+		for key, metric := range r.Metrics {
+			if metric.Status == "error" {
+				issues = append(issues, &CloudError{Code: "MonitorQueryFailed", Message: r.InstanceID + " / " + key + "：" + metric.Reason})
+			}
+		}
+		if r.TagsError != "" {
+			issues = append(issues, &CloudError{Code: "TagQueryFailed", Message: r.InstanceID + "：" + r.TagsError})
+		}
+		// 账号同步同样保留失败指标的旧值，避免刷新失败后把已有监控清空。
+		for key, old := range oldMetrics[r.InstanceID] {
+			current := r.Metrics[key]
+			if old.Value != nil && (current.Status == "error" || (current.SampledAt != nil && old.SampledAt != nil && current.SampledAt.Before(*old.SampledAt))) {
+				old.Status = "stale"
+				if current.Status == "error" {
+					old.Reason = current.Reason + "；保留上次采样"
+				}
+				r.Metrics[key] = old
+			}
+		}
 		if err := a.DB.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "account_id"}, {Name: "kind"}, {Name: "region"}, {Name: "instance_id"}}, DoUpdates: clause.AssignmentColumns([]string{"name", "public_ip", "private_ip", "spec", "cpu", "memory", "disk", "state", "tags", "tags_error", "metrics", "database", "synced_at"})}).Create(&r).Error; err != nil {
-			return err
+			issues = append(issues, &CloudError{Code: "SnapshotPersistFailed", Message: "数据库资源快照写入失败：" + r.InstanceID})
+			return errors.Join(issues...)
 		}
 	}
 	// 列表必须完整查询并成功保存，才标记该地域中已不存在的实例。
@@ -285,5 +336,8 @@ func (a *App) syncRegion(ctx context.Context, ac CloudAccount, region, kind stri
 	if len(ids) > 0 {
 		q = q.Where("instance_id NOT IN ?", ids)
 	}
-	return q.Update("state", "NOT_FOUND").Error
+	if q.Update("state", "NOT_FOUND").Error != nil {
+		issues = append(issues, &CloudError{Code: "SnapshotStatePersistFailed", Message: "数据库资源状态写入失败"})
+	}
+	return errors.Join(issues...)
 }

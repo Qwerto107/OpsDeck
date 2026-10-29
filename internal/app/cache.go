@@ -5,8 +5,31 @@ import (
 )
 
 type resourceCache struct {
-	UpdatedAt  *time.Time `json:"updated_at"`
-	TTLSeconds int        `json:"ttl_seconds"`
+	UpdatedAt         *time.Time `json:"updated_at"`
+	TTLSeconds        int        `json:"ttl_seconds"`
+	SampledAt         *time.Time `json:"sampled_at"`
+	StaleAfterSeconds int        `json:"stale_after_seconds"`
+}
+
+func (a *App) monitorSample(cache *resourceCache, rows []Resource) error {
+	settings, err := a.settings()
+	if err != nil {
+		return err
+	}
+	cache.StaleAfterSeconds = settings.StaleMinutes * 60
+	// 使用当前可见指标的实际采样时间，不能把任务结束时间当成云监控采样时间。
+	for _, r := range rows {
+		if r.State != "RUNNING" {
+			continue
+		}
+		for _, metric := range r.Metrics {
+			if metric.Value != nil && metric.SampledAt != nil && (cache.SampledAt == nil || metric.SampledAt.Before(*cache.SampledAt)) {
+				sampled := *metric.SampledAt
+				cache.SampledAt = &sampled
+			}
+		}
+	}
+	return nil
 }
 
 // 过期快照继续可读；只有用户明确刷新才回源，避免重载页面触发云请求。

@@ -8,6 +8,7 @@ import { api } from "../api";
 import { kindLabel } from "../clouds";
 import { useResourceSync } from "../useResourceSync";
 import StatusBadge from "../components/StatusBadge.vue";
+import ResourceSyncControl from "../components/ResourceSyncControl.vue";
 import MetricValue from "../components/MetricValue.vue";
 import ActionModal from "../components/ActionModal.vue";
 const route = useRoute(),
@@ -69,19 +70,19 @@ async function load() {
     busy.value = false;
   }
 }
-const { refresh, syncing, syncStatus, syncError, cacheLabel } = useResourceSync(
+const { refresh, retryFailed, syncState } = useResourceSync(
   load,
-  () => ({ resource_id: Number(route.params.id) }),
+  () => ({
+    resource_ids: resource.value?.can_refresh_monitor
+      ? [Number(route.params.id)]
+      : [],
+  }),
   cache,
 );
 onMounted(() => void load());
 </script>
 <template>
   <div class="instance-detail">
-    <n-alert v-if="syncError" type="warning"
-      >{{ syncError }}
-      <n-button text @click="refresh">重试更新</n-button></n-alert
-    >
     <n-alert v-if="error" type="error"
       >{{ error }} <n-button text @click="load">重试</n-button></n-alert
     >
@@ -157,18 +158,18 @@ onMounted(() => void load());
         <section class="panel monitor-panel">
           <div class="row spread wrap">
             <h2>当前监控</h2>
-            <div class="row wrap">
-              <span class="muted monitor-time">{{ cacheLabel }}</span>
-              <span
-                v-if="syncStatus"
-                class="muted monitor-time"
-                role="status"
-                >{{ syncStatus }}</span
-              ><n-button size="small" :loading="syncing" @click="refresh"
-                >更新</n-button
-              >
-            </div>
+            <ResourceSyncControl
+              compact
+              :state="syncState"
+              @refresh="refresh"
+            />
           </div>
+          <ResourceSyncControl
+            mode="notice"
+            :state="syncState"
+            @refresh="refresh"
+            @retry="retryFailed"
+          />
           <table v-if="metrics.length" class="monitor-table">
             <thead>
               <tr>

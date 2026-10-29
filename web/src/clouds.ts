@@ -9,6 +9,12 @@ export const databaseKinds = [
   { label: "PostgreSQL", value: "postgresql" },
 ];
 export const allResourceKinds = [...resourceKinds, ...databaseKinds];
+export const databaseMetrics = [
+  { key: "cpu", label: "CPU 使用率" },
+  { key: "memory", label: "内存使用率" },
+  { key: "disk", label: "存储空间使用率" },
+  { key: "connections", label: "当前连接数" },
+];
 export function kindLabel(kind: string) {
   return allResourceKinds.find((item) => item.value === kind)?.label || kind;
 }
