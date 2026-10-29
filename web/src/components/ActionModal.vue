@@ -7,10 +7,13 @@ import {
   NInput,
   NAlert,
   NCheckbox,
+  NDescriptions,
+  NDescriptionsItem,
   useMessage,
 } from "naive-ui";
 import type { Resource } from "../types";
 import { api } from "../api";
+import { kindLabel } from "../clouds";
 const props = defineProps<{
     show: boolean;
     resource: Resource | null;
@@ -78,10 +81,34 @@ async function submit() {
       aria-modal="true"
       :aria-label="name + '确认'"
       ><div class="modal-title">{{ name }} {{ resource?.name }}？</div>
-      <p class="muted mono">
-        {{ resource?.instance_id }} · {{ resource?.kind.toUpperCase() }} ·
-        {{ resource?.region }}
-      </p>
+      <n-descriptions
+        v-if="resource"
+        bordered
+        size="small"
+        :column="1"
+        label-placement="left"
+        :content-style="{ overflowWrap: 'anywhere' }"
+        style="margin: 16px 0"
+      >
+        <n-descriptions-item label="所属云账号">{{
+          resource.account_name || "—"
+        }}</n-descriptions-item>
+        <n-descriptions-item label="实例 ID">{{
+          resource.instance_id || "—"
+        }}</n-descriptions-item>
+        <n-descriptions-item label="实例类型">{{
+          kindLabel(resource.kind)
+        }}</n-descriptions-item>
+        <n-descriptions-item label="地域">{{
+          resource.region || "—"
+        }}</n-descriptions-item>
+        <n-descriptions-item label="公网 IP">{{
+          resource.public_ip || "—"
+        }}</n-descriptions-item>
+        <n-descriptions-item label="私网 IP">{{
+          resource.private_ip || "—"
+        }}</n-descriptions-item>
+      </n-descriptions>
       <div v-if="forced" class="danger-box">
         {{ name }}相当于直接断电{{
           action === "force_reboot" ? "后再启动" : ""
