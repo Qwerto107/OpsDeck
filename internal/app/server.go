@@ -238,6 +238,16 @@ func (a *App) record(c *gin.Context, db *gorm.DB, action, target, result, messag
 		row.UserID = &u.ID
 		row.Actor = u.Username
 	}
+	if submittedAudit(action) && row.Result == "success" {
+		row.Result = "accepted"
+	}
+	if snapshot, ok := c.Get("audit_target_snapshot"); ok {
+		value := snapshot.(Audit)
+		row.TargetLabel, row.TargetDetails = value.TargetLabel, value.TargetDetails
+	}
+	if err := fillAuditTarget(db, &row); err != nil {
+		return err
+	}
 	err := db.Create(&row).Error
 	if err == nil {
 		c.Set("audited", true)

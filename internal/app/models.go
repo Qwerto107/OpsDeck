@@ -98,16 +98,22 @@ func isServer(kind string) bool {
 }
 
 type Audit struct {
-	ID        uint64    `json:"id"`
-	UserID    *uint64   `json:"user_id"`
-	Actor     string    `json:"actor"`
-	SourceIP  string    `json:"source_ip"`
-	Action    string    `json:"action"`
-	Target    string    `json:"target"`
-	Result    string    `json:"result"`
-	Message   string    `json:"message"`
-	RequestID string    `json:"request_id"`
-	CreatedAt time.Time `json:"created_at"`
+	TargetLabel    string        `json:"target_label"`
+	TargetDetails  []AuditTarget `json:"target_details" gorm:"serializer:json;type:jsonb"`
+	TargetSource   string        `json:"target_source" gorm:"-"`
+	DisplayResult  string        `json:"display_result" gorm:"-"`
+	DisplayMessage string        `json:"display_message" gorm:"-"`
+	Task           *AuditTask    `json:"task,omitempty" gorm:"-"`
+	ID             uint64        `json:"id"`
+	UserID         *uint64       `json:"user_id"`
+	Actor          string        `json:"actor"`
+	SourceIP       string        `json:"source_ip"`
+	Action         string        `json:"action"`
+	Target         string        `json:"target"`
+	Result         string        `json:"result"`
+	Message        string        `json:"message"`
+	RequestID      string        `json:"request_id"`
+	CreatedAt      time.Time     `json:"created_at"`
 }
 type Task struct {
 	ResourceIDs        []uint64        `json:"-" gorm:"serializer:json;type:jsonb"`

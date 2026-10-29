@@ -226,6 +226,9 @@ func (a *App) action(c *gin.Context) {
 	audit := Audit{UserID: &u.ID, Actor: u.Username, SourceIP: c.ClientIP(), Action: "instances." + in.Action, Target: ResourceKey(r), Result: "accepted", RequestID: c.GetString("request_id")}
 	task := Task{ResourceID: &r.ID, AccountID: &r.AccountID, Action: in.Action, Status: "queued", BaselineState: r.State, NextRun: time.Now()}
 	err := a.DB.Transaction(func(tx *gorm.DB) error {
+		if err := fillAuditTarget(tx, &audit); err != nil {
+			return err
+		}
 		// 唯一索引使同一实例同一时间只能存在一个未完成操作。
 		if e := tx.Create(&audit).Error; e != nil {
 			return e

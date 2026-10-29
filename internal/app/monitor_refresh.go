@@ -80,6 +80,9 @@ func (a *App) refreshSelected(c *gin.Context, ids []uint64) {
 			err := tx.Where("account_id = ? AND action = 'monitor' AND status IN ? AND resource_ids = ?::jsonb", id, []string{"queued", "submitting"}, string(encoded)).First(&task).Error
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				audit := Audit{UserID: &u.ID, Actor: u.Username, SourceIP: c.ClientIP(), Action: "resources.monitor", Target: string(encoded), Result: "accepted", RequestID: c.GetString("request_id")}
+				if err = fillAuditTarget(tx, &audit); err != nil {
+					return err
+				}
 				if err = tx.Create(&audit).Error; err != nil {
 					return err
 				}

@@ -90,6 +90,18 @@ export interface Task {
   updated_at: string;
 }
 export interface Audit {
+  target_label?: string;
+  target_details?: AuditTarget[];
+  target_source?: string;
+  display_result?: string;
+  display_message?: string;
+  task?: {
+    id: number;
+    status: string;
+    error: string;
+    request_id: string;
+    results: RefreshResult[] | null;
+  };
   id: number;
   actor: string;
   source_ip: string;
@@ -99,6 +111,15 @@ export interface Audit {
   message: string;
   request_id: string;
   created_at: string;
+}
+export interface AuditTarget {
+  resource_id?: number;
+  name: string;
+  instance_id?: string;
+  account_id?: number;
+  account_name?: string;
+  region?: string;
+  kind: string;
 }
 export interface Provider {
   id: number;

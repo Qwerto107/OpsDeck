@@ -478,11 +478,16 @@ func (a *App) audits(c *gin.Context) {
 	db := a.DB.Model(&Audit{})
 	for _, k := range []string{"actor", "action", "result"} {
 		if v := c.Query(k); v != "" {
-			db = db.Where(k+" = ?", v)
+			if k == "result" {
+				db = db.Where("COALESCE((SELECT status FROM tasks WHERE audit_id = audits.id ORDER BY id DESC LIMIT 1), CASE WHEN action IN ('accounts.sync','resources.sync') AND result = 'success' THEN 'accepted' ELSE result END) = ?", v)
+			} else {
+				db = db.Where(k+" = ?", v)
+			}
 		}
 	}
 	if v := c.Query("q"); v != "" {
-		db = db.Where("target ILIKE ? OR message ILIKE ?", "%"+v+"%", "%"+v+"%")
+		pattern := "%" + v + "%"
+		db = db.Where("target ILIKE ? OR target_label ILIKE ? OR target_details::text ILIKE ? OR message ILIKE ? OR id IN (SELECT audit_id FROM tasks WHERE audit_id IS NOT NULL AND refresh_results::text ILIKE ?)", pattern, pattern, pattern, pattern, pattern)
 	}
 	for _, f := range []struct{ Query, Op string }{{"from", ">="}, {"to", "<="}} {
 		if v := c.Query(f.Query); v != "" {
@@ -502,6 +507,10 @@ func (a *App) audits(c *gin.Context) {
 	}
 	if db.Count(&count).Error != nil || db.Order("id DESC").Offset((page-1)*30).Limit(30).Find(&rows).Error != nil {
 		fail(c, 503, "无法读取审计日志")
+		return
+	}
+	if presentAudits(a.DB, rows) != nil {
+		fail(c, 503, "无法读取审计目标详情")
 		return
 	}
 	c.JSON(200, gin.H{"items": rows, "total": count})
@@ -527,6 +536,13 @@ func (a *App) unlink(c *gin.Context) {
 		fail(c, 404, "身份关联不存在")
 		return
 	}
+	var provider OAuthProvider
+	var user User
+	if a.DB.Select("id, name").First(&provider, row.ProviderID).Error != nil || a.DB.Select("id, username").First(&user, row.UserID).Error != nil {
+		fail(c, 503, "无法读取身份关联目标")
+		return
+	}
+	c.Set("audit_target_snapshot", Audit{TargetLabel: provider.Name + " · " + user.Username, TargetDetails: []AuditTarget{{Kind: "identity", Name: provider.Name + " · " + user.Username}}})
 	if a.mutation(c, "identities.unlink", fmt.Sprint(row.ID), func(tx *gorm.DB) error {
 		if e := tx.Delete(&row).Error; e != nil {
 			return e

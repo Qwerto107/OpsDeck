@@ -86,7 +86,7 @@ func (a *App) finish(task Task, status, message, requestID string) {
 			if status == "waiting" {
 				result = "accepted"
 			}
-			if e := tx.Model(&Audit{}).Where("id = ?", *task.AuditID).Updates(map[string]any{"result": result, "message": message, "request_id": requestID}).Error; e != nil {
+			if e := tx.Model(&Audit{}).Where("id = ?", *task.AuditID).Updates(map[string]any{"result": result, "message": message}).Error; e != nil {
 				return e
 			}
 		}

@@ -77,6 +77,14 @@ func (a *App) refreshResources(c *gin.Context) {
 		fail(c, 503, "无法读取云账号")
 		return
 	}
+	snapshot := Audit{TargetDetails: []AuditTarget{}}
+	for _, ac := range accounts {
+		if canRefreshAccount(u, ac.ID) {
+			snapshot.TargetDetails = append(snapshot.TargetDetails, AuditTarget{Kind: "account", Name: ac.Name, AccountName: ac.Name, AccountID: ac.ID})
+		}
+	}
+	snapshot.TargetLabel = auditTargetLabel(snapshot.TargetDetails)
+	c.Set("audit_target_snapshot", snapshot)
 	out := []syncProgress{}
 	if a.mutation(c, "resources.sync", "authorized-accounts", func(tx *gorm.DB) error {
 		for _, ac := range accounts {

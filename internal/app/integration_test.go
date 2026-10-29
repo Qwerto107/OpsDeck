@@ -73,7 +73,7 @@ func integrationApp(t *testing.T) (*App, User) {
 	if e = db.Exec(string(sql)).Error; e != nil {
 		t.Fatal(e)
 	}
-	for _, name := range []string{"000004_oauth_binding.up.sql", "000005_session_defaults.up.sql", "000006_monitor_refresh.up.sql"} {
+	for _, name := range []string{"000004_oauth_binding.up.sql", "000005_session_defaults.up.sql", "000006_monitor_refresh.up.sql", "000007_audit_target_snapshots.up.sql"} {
 		sql, e = migrations.Files.ReadFile(name)
 		if e != nil {
 			t.Fatal(e)

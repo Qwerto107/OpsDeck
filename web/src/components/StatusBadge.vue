@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from "vue";
-const props = defineProps<{ value: string }>();
+const props = defineProps<{ value: string; label?: string }>();
 const names: Record<string, string> = {
   RUNNING: "运行中",
   STOPPED: "已关机",
@@ -39,6 +39,6 @@ const tone = computed(() =>
 </script>
 <template>
   <span class="status" :class="tone"
-    ><i aria-hidden="true" />{{ names[value] || value }}</span
+    ><i aria-hidden="true" />{{ label || names[value] || value }}</span
   >
 </template>
