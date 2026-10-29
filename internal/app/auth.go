@@ -26,17 +26,17 @@ func (a *App) login(c *gin.Context) {
 	if !a.issueSession(c, u, "auth.login") {
 		return
 	}
-	a.DB.Exec("DELETE FROM login_attempts WHERE key = ?", TokenHash(c.ClientIP()))
+	a.DB.Exec("DELETE FROM login_attempts WHERE key = ?", TokenHash(sourceIP(c)))
 	a.me(c)
 }
 
 // 密码登录和首次身份绑定共享限流，不能通过另一入口绕过密码尝试上限。
 func (a *App) passwordUser(c *gin.Context, username, password, action string) (User, bool) {
-	if c.GetHeader("Origin") != a.Origin {
+	if c.GetHeader("Origin") != appURL(c) {
 		fail(c, 403, "请从平台页面登录")
 		return User{}, false
 	}
-	key := TokenHash(c.ClientIP())
+	key := TokenHash(sourceIP(c))
 	var attempts int
 	err := a.DB.Raw(`INSERT INTO login_attempts(key,attempts,expires_at) VALUES(?,1,now()+interval '15 minutes') ON CONFLICT(key) DO UPDATE SET attempts=CASE WHEN login_attempts.expires_at<now() THEN 1 ELSE login_attempts.attempts+1 END,expires_at=CASE WHEN login_attempts.expires_at<now() THEN now()+interval '15 minutes' ELSE login_attempts.expires_at END RETURNING attempts`, key).Scan(&attempts).Error
 	if err != nil {
@@ -79,7 +79,7 @@ func (a *App) issueSession(c *gin.Context, u User, action string) bool {
 }
 func (a *App) setSession(c *gin.Context, u User, s Session, token string) {
 	c.SetSameSite(http.SameSiteLaxMode)
-	c.SetCookie("opsdeck_session", token, 60*60*24*7, "/", "", a.Secure, true)
+	c.SetCookie("opsdeck_session", token, 60*60*24*7, "/", "", secureCookie(c), true)
 	c.Set("session", s)
 	c.Set("user", u)
 }
@@ -91,7 +91,7 @@ func (a *App) me(c *gin.Context) {
 func (a *App) logout(c *gin.Context) {
 	s := c.MustGet("session").(Session)
 	if a.mutation(c, "auth.logout", "", func(tx *gorm.DB) error { return tx.Delete(&s).Error }) {
-		c.SetCookie("opsdeck_session", "", -1, "/", "", a.Secure, true)
+		c.SetCookie("opsdeck_session", "", -1, "/", "", secureCookie(c), true)
 		c.Status(204)
 	}
 }

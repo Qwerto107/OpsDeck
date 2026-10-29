@@ -6,7 +6,7 @@
 
 业务路径以 `/api` 开头，使用 JSON。下表的 `:id` 为平台记录的数值 ID，云端实例 ID 使用 `instance_id` 字段。完整路由与数据结构以 [server.go](../internal/app/server.go) 和 [models.go](../internal/app/models.go) 为准。
 
-登录后使用 `opsdeck_session` Cookie，不提供独立 API Token。`POST /login` 必须带与 `APP_URL` 一致的 `Origin`，成功返回 `user` 和 `csrf_token`。登录后的写请求必须带 `X-CSRF-Token`，可通过 `GET /me` 获取当前值。
+登录后使用 `opsdeck_session` Cookie，不提供独立 API Token。`POST /login` 必须带与系统设置的访问地址一致的 `Origin`，成功返回 `user` 和 `csrf_token`。登录后的写请求必须带 `X-CSRF-Token`，可通过 `GET /me` 获取当前值。
 
 错误返回 `{ "error": "说明" }`，常见状态为 400 参数错误、401 未登录或会话过期、403 无权限、404 不存在、409 冲突、410 绑定请求失效、429 登录限流和 503 服务不可用。响应头 `X-Request-ID` 用于排查问题。202 表示任务已受理，不代表云端操作完成。
 
@@ -30,7 +30,7 @@
 
 `GET /oauth/bind` 无需登录，使用短期 HttpOnly 绑定 Cookie 读取 `provider_name`、`subject_hint`、`csrf_token` 和 `expires_at`。凭证有效期为 5 分钟，响应不返回原始绑定凭证或完整第三方标识。
 
-`POST /oauth/bind` 同时要求与 APP_URL 一致的 Origin、绑定 Cookie 和请求头 `X-OAuth-Bind-CSRF`，其值来自上述 GET 响应。请求字段为 `username`、`password` 和 `confirm: true`。验证管理员创建的已有启用账号后，原子完成身份关联、凭证消费、审计和会话创建；成功响应与密码登录一致。
+`POST /oauth/bind` 同时要求与系统设置的访问地址一致的 Origin、绑定 Cookie 和请求头 `X-OAuth-Bind-CSRF`，其值来自上述 GET 响应。请求字段为 `username`、`password` 和 `confirm: true`。验证管理员创建的已有启用账号后，原子完成身份关联、凭证消费、审计和会话创建；成功响应与密码登录一致。
 
 错误密码返回 401 并保留向导，临时密码或关联冲突返回 409，凭证过期或已消费返回 410。密码验证复用普通登录的限流。默认会话为空闲 480 分钟、最长 72 小时，可由 settings.manage 权限用户手动设置。
 
@@ -112,10 +112,12 @@
 
 `POST /accounts/:id/sync` 返回 202 和 `tasks` 编号，使用 `/sync-tasks` 跟踪结果。账号 `sync_error` 与完整同步任务的 `error` 按行保留各阶段错误，包含地域、产品、接口、错误码、脱敏说明和云请求 ID。完整账号日志要求 `accounts.manage`；仅有资源查看权限的用户只收到任务状态及概括性失败提示，防止泄露范围外的实例信息。
 
-设置包括 `metrics`、`stale_minutes`、`idle_minutes`、`max_hours` 和 `retention_days`。`stale_minutes` 默认 10，范围为 1 至 1,440 分钟，只用于过期提示；原 `refresh_seconds` 已移除。缩短审计保留期需额外请求头 `X-Confirm-Retention: true`。
+设置包括 `app_url`、`trusted_proxies`、`metrics`、`stale_minutes`、`idle_minutes`、`max_hours` 和 `retention_days`。`stale_minutes` 默认 10，范围为 1 至 1,440 分钟，只用于过期提示；原 `refresh_seconds` 已移除。缩短审计保留期需额外请求头 `X-Confirm-Retention: true`。
 
 `GET /audits` 保留原始 `action`、`target`、`result`、`message` 和 `request_id`。展示字段为 `target_label`、`target_details`、`target_source`、`display_result` 和 `display_message`；关联任务通过 `task` 返回执行状态、云请求 ID 及逐实例结果。`target_source` 区分快照、历史任务及当前资源解析。名称搜索支持快照和关联任务明细，结果筛选按展示状态判断，历史日志不回写。
 
 ## 健康检查
 
 `GET /healthz` 不带 `/api` 前缀，无需登录。数据库可连接时返回 200 和 `{ "status": "ok" }`，不可用时返回 503。健康检查不验证云端凭证或同步是否完成。
+
+`app_url` 留空时按当前 Host 校验浏览器来源，填写时必须是 HTTP/HTTPS 访问源（不带路径、参数、账号信息）。`trusted_proxies` 是 IP/CIDR 字符串数组，默认空数组，不信任转发头，最多 100 项。两项保存后立即生效；访问地址改变时同步更新平台保存的 OAuth2 回调地址，外部身份平台也需更新。

@@ -134,12 +134,14 @@ type Task struct {
 	ObservedTransition bool            `json:"-"`
 }
 type Settings struct {
-	ID            int      `json:"-"`
-	StaleMinutes  int      `json:"stale_minutes"`
-	IdleMinutes   int      `json:"idle_minutes"`
-	MaxHours      int      `json:"max_hours"`
-	RetentionDays int      `json:"retention_days"`
-	Metrics       []string `json:"metrics" gorm:"serializer:json;type:jsonb"`
+	AppURL         string   `json:"app_url"`
+	TrustedProxies []string `json:"trusted_proxies" gorm:"serializer:json;type:jsonb"`
+	ID             int      `json:"-"`
+	StaleMinutes   int      `json:"stale_minutes"`
+	IdleMinutes    int      `json:"idle_minutes"`
+	MaxHours       int      `json:"max_hours"`
+	RetentionDays  int      `json:"retention_days"`
+	Metrics        []string `json:"metrics" gorm:"serializer:json;type:jsonb"`
 }
 type OAuthProvider struct {
 	ID           uint64 `json:"id"`

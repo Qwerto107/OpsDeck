@@ -76,7 +76,7 @@ func (a *App) saveProvider(c *gin.Context) {
 		if e := tx.Save(&in.OAuthProvider).Error; e != nil {
 			return e
 		}
-		in.RedirectURL = fmt.Sprintf("%s/api/oauth/%d/callback", a.Origin, in.ID)
+		in.RedirectURL = fmt.Sprintf("%s/api/oauth/%d/callback", appURL(c), in.ID)
 		return tx.Model(&in.OAuthProvider).Update("redirect_url", in.RedirectURL).Error
 	}) {
 		c.JSON(200, in.OAuthProvider)
@@ -119,7 +119,7 @@ func (a *App) oauthStart(c *gin.Context) {
 		return
 	}
 	c.SetSameSite(http.SameSiteLaxMode)
-	c.SetCookie("opsdeck_oauth", state, 300, "/api/oauth/", "", a.Secure, true)
+	c.SetCookie("opsdeck_oauth", state, 300, "/api/oauth/", "", secureCookie(c), true)
 	c.Redirect(302, conf.AuthCodeURL(state, oauth2.S256ChallengeOption(row.Verifier)))
 }
 func (a *App) oauthCallback(c *gin.Context) {
@@ -133,7 +133,7 @@ func (a *App) oauthCallback(c *gin.Context) {
 		failure()
 		return
 	}
-	c.SetCookie("opsdeck_oauth", "", -1, "/api/oauth/", "", a.Secure, true)
+	c.SetCookie("opsdeck_oauth", "", -1, "/api/oauth/", "", secureCookie(c), true)
 	var state OAuthState
 	// DELETE RETURNING 原子消费 state，授权回调只能使用一次。
 	if a.DB.Raw("DELETE FROM oauth_states WHERE id = ? AND expires_at > now() RETURNING *", TokenHash(raw)).Scan(&state).Error != nil || state.ID == "" || fmt.Sprint(state.ProviderID) != c.Param("id") || c.Query("code") == "" {

@@ -2,8 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/cipher"
 	"errors"
-	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -13,16 +13,12 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/golang-migrate/migrate/v4"
-	_ "github.com/golang-migrate/migrate/v4/database/postgres"
-	"github.com/golang-migrate/migrate/v4/source/iofs"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
 	"opsdeck/internal/app"
-	"opsdeck/migrations"
 )
 
 func main() {
@@ -37,25 +33,25 @@ func run() error {
 	if len(os.Args) > 1 {
 		command = os.Args[1]
 	}
+	if command != "migrate" && command != "init" && command != "bootstrap" && command != "api" && command != "all" && command != "worker" {
+		return errors.New("支持的命令：bootstrap、migrate、init、all、api、worker")
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
 		return errors.New("请设置 DATABASE_URL")
 	}
 	if command == "migrate" {
-		source, e := iofs.New(migrations.Files, ".")
-		if e != nil {
-			return e
+		return migrateDatabase(dsn)
+	}
+	if command == "bootstrap" {
+		if err := waitDatabase(ctx, dsn); err != nil {
+			return err
 		}
-		m, e := migrate.NewWithSourceInstance("iofs", source, dsn)
-		if e != nil {
-			return errors.New("数据库迁移连接失败")
+		if err := migrateDatabase(dsn); err != nil {
+			return err
 		}
-		defer m.Close()
-		e = m.Up()
-		if errors.Is(e, migrate.ErrNoChange) {
-			return nil
-		}
-		return e
 	}
 	db, e := gorm.Open(postgres.Open(dsn), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent), TranslateError: true})
 	if e != nil {
@@ -73,26 +69,22 @@ func run() error {
 	if keyPath == "" {
 		keyPath = "secrets/master.key"
 	}
-	key, e := app.OpenKey(db, keyPath, command == "init")
+	var key cipher.AEAD
+	if command == "bootstrap" {
+		key, e = bootstrap(db.WithContext(ctx), keyPath)
+	} else {
+		key, e = app.OpenKey(db, keyPath, command == "init")
+	}
 	if e != nil {
 		return e
 	}
 	if command == "init" {
 		return initialize(db)
 	}
-	origin := strings.TrimSuffix(os.Getenv("APP_URL"), "/")
-	if origin == "" {
-		origin = "http://localhost:5173"
-	}
-	a := &app.App{DB: db, Key: key, Origin: origin, Secure: !strings.HasPrefix(origin, "http://localhost:") && !strings.HasPrefix(origin, "http://127.0.0.1:"), Cloud: app.NewCloud(key)}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
+	a := &app.App{DB: db, Key: key, Cloud: app.NewCloud(key)}
 	if command == "worker" {
 		a.RunWorker(ctx)
 		return nil
-	}
-	if command != "api" && command != "all" {
-		return errors.New("支持的命令：migrate、init、all、api、worker")
 	}
 	addr := os.Getenv("LISTEN_ADDR")
 	if addr == "" {
@@ -100,7 +92,7 @@ func run() error {
 	}
 	server := &http.Server{Addr: addr, Handler: a.Router(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 60 * time.Second, IdleTimeout: 60 * time.Second}
 	var worker func(context.Context)
-	if command == "all" {
+	if command == "all" || command == "bootstrap" {
 		worker = a.RunWorker
 	}
 	return serve(ctx, server, worker)
@@ -147,18 +139,28 @@ func serve(parent context.Context, server *http.Server, worker func(context.Cont
 	return err
 }
 func initialize(db *gorm.DB) error {
-	username := os.Getenv("INIT_USERNAME")
-	password := os.Getenv("INIT_PASSWORD")
-	if path := os.Getenv("INIT_PASSWORD_FILE"); path != "" {
-		b, e := os.ReadFile(path)
-		if e != nil {
-			return errors.New("无法读取初始密码文件")
-		}
-		password = strings.TrimRight(string(b), "\r\n")
+	username, password := initialCredentials()
+	if err := initializeAdmin(db, username, password); err != nil {
+		return err
 	}
-	if username == "" || !app.ValidPassword(password) {
-		return errors.New("首次初始化需设置 INIT_USERNAME 及 12 至 72 字节的 INIT_PASSWORD 或 INIT_PASSWORD_FILE")
+	logInitialCredentials(username, password)
+	return nil
+}
+
+func initialCredentials() (string, string) {
+	username := strings.TrimSpace(os.Getenv("INIT_USERNAME"))
+	if username == "" {
+		username = "admin"
 	}
+	return username, app.RandomToken()[:24]
+}
+
+func logInitialCredentials(username, password string) {
+	// 仅首次初始化提交成功后输出临时密码；普通登录和后续启动不得输出密码。
+	slog.Info("首次管理员已创建，请登录后修改临时密码并备份主密钥", "username", username, "temporary_password", password)
+}
+
+func initializeAdmin(db *gorm.DB, username, password string) error {
 	hash, e := bcrypt.GenerateFromPassword([]byte(password), 12)
 	if e != nil {
 		return e
@@ -177,11 +179,10 @@ func initialize(db *gorm.DB) error {
 				return e
 			}
 		}
-		user := app.User{Username: username, DisplayName: username, PasswordHash: string(hash), Enabled: true, MustChangePassword: false, Preferences: map[string]any{}, Roles: []app.Role{roles[0]}}
+		user := app.User{Username: username, DisplayName: username, PasswordHash: string(hash), Enabled: true, MustChangePassword: true, Preferences: map[string]any{}, Roles: []app.Role{roles[0]}}
 		if e := tx.Create(&user).Error; e != nil {
 			return e
 		}
-		fmt.Println("管理员已创建，请妥善保存初始密码和主密钥文件。")
 		return tx.Create(&app.Audit{UserID: &user.ID, Actor: username, Action: "system.initialize", Result: "success"}).Error
 	})
 }

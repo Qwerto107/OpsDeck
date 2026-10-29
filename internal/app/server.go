@@ -12,6 +12,7 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"opsdeck/internal/webui"
@@ -21,11 +22,14 @@ import (
 )
 
 type App struct {
-	DB     *gorm.DB
-	Key    cipher.AEAD
-	Origin string
-	Secure bool
-	Cloud  Cloud
+	DB         *gorm.DB
+	Key        cipher.AEAD
+	Origin     string
+	Secure     bool
+	Cloud      Cloud
+	runtimeMu  sync.RWMutex
+	router     *gin.Engine
+	runtimeURL string
 }
 
 func (a *App) settings() (Settings, error) {
@@ -59,14 +63,31 @@ func (a *App) Router() *gin.Engine {
 		}()
 		c.Next()
 	})
-	// 只信任显式配置的反向代理，防止伪造来源 IP 绕过登录限流。
-	_ = r.SetTrustedProxies(nil)
-	if proxies := os.Getenv("TRUSTED_PROXIES"); proxies != "" {
-		if err := r.SetTrustedProxies(strings.Split(proxies, ",")); err != nil {
-			panic(err)
-		}
+	settings, err := a.settings()
+	if err != nil {
+		panic("无法读取服务设置")
+	}
+	a.runtimeMu.Lock()
+	a.router, a.runtimeURL = r, settings.AppURL
+	err = r.SetTrustedProxies(settings.TrustedProxies)
+	a.runtimeMu.Unlock()
+	if err != nil {
+		panic("可信代理配置无效")
 	}
 	r.Use(func(c *gin.Context) {
+		// Gin 的代理列表不支持并发修改；在请求入口锁定来源信息，后续统一复用。
+		a.runtimeMu.RLock()
+		c.Set("source_ip", c.ClientIP())
+		origin := a.runtimeURL
+		a.runtimeMu.RUnlock()
+		if origin == "" {
+			origin = a.Origin
+		}
+		if origin == "" {
+			origin = requestOrigin(c)
+		}
+		c.Set("app_url", origin)
+		c.Set("secure_cookie", a.Secure || strings.HasPrefix(origin, "https://"))
 		if id := c.Param("id"); id != "" {
 			if n, e := strconv.ParseUint(id, 10, 64); e != nil || n == 0 {
 				bad(c, "无效记录编号")
@@ -85,7 +106,7 @@ func (a *App) Router() *gin.Engine {
 		}
 		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 1<<20)
 		if c.Request.Method != "GET" && c.Request.Method != "HEAD" && c.Request.Method != "OPTIONS" {
-			if origin := c.GetHeader("Origin"); origin != "" && origin != a.Origin {
+			if origin := c.GetHeader("Origin"); origin != "" && origin != appURL(c) {
 				fail(c, 403, "请求来源不受信任")
 				return
 			}
@@ -232,7 +253,7 @@ func (a *App) require(permission string) gin.HandlerFunc {
 	}
 }
 func (a *App) record(c *gin.Context, db *gorm.DB, action, target, result, message string) error {
-	row := Audit{Actor: "anonymous", SourceIP: c.ClientIP(), Action: action, Target: target, Result: result, Message: message, RequestID: c.GetString("request_id")}
+	row := Audit{Actor: "anonymous", SourceIP: sourceIP(c), Action: action, Target: target, Result: result, Message: message, RequestID: c.GetString("request_id")}
 	if v, ok := c.Get("user"); ok {
 		u := v.(User)
 		row.UserID = &u.ID

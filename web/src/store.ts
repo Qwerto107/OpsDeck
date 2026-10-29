@@ -7,6 +7,8 @@ export const useSession = defineStore("session", () => {
   const user = ref<User | null>(null),
     ready = ref(false);
   const settings = ref<Settings>({
+    app_url: "",
+    trusted_proxies: [],
     stale_minutes: 10,
     idle_minutes: 480,
     max_hours: 72,

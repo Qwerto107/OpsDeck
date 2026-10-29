@@ -69,6 +69,8 @@ export interface Account {
   sync_error: string;
 }
 export interface Settings {
+  app_url: string;
+  trusted_proxies: string[];
   stale_minutes: number;
   idle_minutes: number;
   max_hours: number;

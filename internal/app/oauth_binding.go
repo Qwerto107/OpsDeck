@@ -32,7 +32,7 @@ func (a *App) rejectOAuthBinding(c *gin.Context, status int, message string) {
 
 func (a *App) bindingCookie(c *gin.Context, value string, maxAge int) {
 	c.SetSameSite(http.SameSiteLaxMode)
-	c.SetCookie(oauthBindingCookie, value, maxAge, "/api/oauth/bind", "", a.Secure, true)
+	c.SetCookie(oauthBindingCookie, value, maxAge, "/api/oauth/bind", "", secureCookie(c), true)
 }
 
 func (a *App) beginOAuthBinding(c *gin.Context, provider OAuthProvider, subject string) {
@@ -84,7 +84,7 @@ func (a *App) pendingOAuthBinding(c *gin.Context) {
 }
 
 func (a *App) bindOAuthIdentity(c *gin.Context) {
-	if c.GetHeader("Origin") != a.Origin {
+	if c.GetHeader("Origin") != appURL(c) {
 		a.rejectOAuthBinding(c, 403, "请从平台页面完成绑定")
 		return
 	}
@@ -178,7 +178,7 @@ func (a *App) bindOAuthIdentity(c *gin.Context) {
 		}
 		return
 	}
-	a.DB.Exec("DELETE FROM login_attempts WHERE key = ?", TokenHash(c.ClientIP()))
+	a.DB.Exec("DELETE FROM login_attempts WHERE key = ?", TokenHash(sourceIP(c)))
 	a.bindingCookie(c, "", -1)
 	a.setSession(c, u, session, token)
 	a.me(c)

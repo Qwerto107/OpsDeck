@@ -1,63 +1,20 @@
 name: opsdeck
-x-app: &app
-  image: opsdeck:local
-  build: .
-  environment: &env
-    DATABASE_URL: postgres://opsdeck:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@postgres:5432/opsdeck?sslmode=disable
-    APP_URL: ${APP_URL:?Set APP_URL}
-    MASTER_KEY_FILE: /run/opsdeck-secrets/master.key
-    TRUSTED_PROXIES: ${TRUSTED_PROXIES:-}
-  volumes:
-    - ./secrets:/run/opsdeck-secrets:ro
-  restart: unless-stopped
-  security_opt:
-    - no-new-privileges:true
-  read_only: true
-  tmpfs:
-    - /tmp
 services:
-  postgres:
-    image: postgres:18-alpine
+  api:
+    image: ghcr.io/qwerto107/opsdeck:latest
+    command: [bootstrap]
+    user: "0:0"
     environment:
-      POSTGRES_USER: opsdeck
-      POSTGRES_DB: opsdeck
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
-    volumes:
-      - postgres-data:/var/lib/postgresql
-    healthcheck:
-      test: [CMD-SHELL, pg_isready -U opsdeck -d opsdeck]
-      interval: 5s
-      timeout: 3s
-      retries: 20
-    restart: unless-stopped
-  migrate:
-    <<: *app
-    command: [migrate]
-    restart: "no"
-    depends_on:
-      postgres:
-        condition: service_healthy
-  init:
-    <<: *app
-    command: [init]
-    restart: "no"
-    profiles: [setup]
-    environment:
-      <<: *env
-      INIT_USERNAME: ${INIT_USERNAME:?Set INIT_USERNAME}
-      INIT_PASSWORD_FILE: ${INIT_PASSWORD_FILE:-/run/opsdeck-secrets/admin-password}
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL}
+      MASTER_KEY_FILE: /run/opsdeck-secrets/master.key
+      INIT_USERNAME: ${INIT_USERNAME:-admin}
     volumes:
       - ./secrets:/run/opsdeck-secrets
-    depends_on:
-      migrate:
-        condition: service_completed_successfully
-  api:
-    <<: *app
-    command: [all]
     ports:
       - 127.0.0.1:8080:8080
-    depends_on:
-      migrate:
-        condition: service_completed_successfully
-volumes:
-  postgres-data:
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp

@@ -20,19 +20,15 @@ Windows 可使用 `Get-FileHash` 核对压缩包 SHA-256，再解压。macOS 可
 
 ## 初始化与运行
 
-以下使用 Linux shell。先准备数据库和专用密钥目录，并自行创建 12 至 72 字节的初始密码文件，仅允许运行用户读取。
+以下使用 Linux shell。先准备 PostgreSQL 数据库，并确保运行用户可写入主密钥目录。临时密码首次初始化时自动生成，在服务日志中仅输出一次。
 
 ```sh
 export DATABASE_URL='postgres://opsdeck:replace-with-db-password@127.0.0.1:5432/opsdeck?sslmode=disable'
 export MASTER_KEY_FILE='./secrets/master.key'
-export APP_URL='http://127.0.0.1:8080'
 export LISTEN_ADDR='127.0.0.1:8080'
-./opsdeck migrate
 
 export INIT_USERNAME='admin'
-export INIT_PASSWORD_FILE='./secrets/admin-password'
-./opsdeck init
-./opsdeck all
+./opsdeck bootstrap
 ```
 
 Windows 使用 `opsdeck.exe`，环境变量设置方式如下，其余变量按相同方式设置：
@@ -40,25 +36,24 @@ Windows 使用 `opsdeck.exe`，环境变量设置方式如下，其余变量按�
 ```powershell
 $env:DATABASE_URL='postgres://opsdeck:replace-with-db-password@127.0.0.1:5432/opsdeck?sslmode=disable'
 $env:MASTER_KEY_FILE='./secrets/master.key'
-$env:APP_URL='http://127.0.0.1:8080'
 $env:INIT_USERNAME='admin'
-$env:INIT_PASSWORD_FILE='./secrets/admin-password'
-.\opsdeck.exe migrate
-.\opsdeck.exe init
-.\opsdeck.exe all
+.\opsdeck.exe bootstrap
 ```
 
-项目没有默认密码。`init` 仅在没有用户时创建管理员，并在首次初始化生成主密钥。初始化后安全移出密码文件，保留主密钥，打开配置的访问地址登录。
+管理员名默认 `admin`，临时密码自动生成，在初始化成功后日志的 `temporary_password` 字段中查看。首次登录必须修改密码。主密钥首次生成后持续复用，请与数据库配套备份。
+
+后续使用相同命令启动，已有用户时不会重置密码。也可手动依次运行 `migrate`、`init` 和 `all`；`init` 同样生成临时密码，并拒绝重复初始化。
 
 ## 命令与配置
 
-| 命令      | 用途                                             |
-| --------- | ------------------------------------------------ |
-| `migrate` | 执行内嵌的向上数据库迁移                         |
-| `init`    | 首次生成主密钥及创建管理员                       |
-| `all`     | 同进程运行 API 和 Worker，也是省略命令时的默认值 |
-| `api`     | 只运行 HTTP 服务，不处理队列任务                 |
-| `worker`  | 独立处理任务、操作结果核对和日志清理             |
+| 命令        | 用途                                             |
+| ----------- | ------------------------------------------------ |
+| `bootstrap` | 自动迁移、首次初始化，再运行 API 和 Worker       |
+| `migrate`   | 执行内嵌的向上数据库迁移                         |
+| `init`      | 首次生成主密钥及创建管理员                       |
+| `all`       | 同进程运行 API 和 Worker，也是省略命令时的默认值 |
+| `api`       | 只运行 HTTP 服务，不处理队列任务                 |
+| `worker`    | 独立处理任务、操作结果核对和日志清理             |
 
 合并模式无需另开 Worker。程序不自动读取 `.env`，环境变量需由 shell 或服务管理器注入。`WEB_DIR` 可显式覆盖内嵌前端，正常使用发布包无需设置。
 

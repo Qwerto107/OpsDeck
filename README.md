@@ -32,27 +32,33 @@
 
 ## 快速部署
 
-推荐使用 Linux、Docker Compose 和外置 Nginx。应用镜像包含前端，Compose 同时提供 PostgreSQL。以下命令从源码构建，使用发布镜像无需构建，见 [部署指南](docs/deployment.md#使用发布镜像)。
+推荐使用 Linux、Docker Compose 和外置 Nginx。默认 Compose 只启动应用，连接已有 PostgreSQL。应用自动迁移数据库、生成主密钥并创建管理员。
+
+下载部署文件：
 
 ```sh
-git clone https://github.com/Qwerto107/OpsDeck.git
-cd OpsDeck
-cp .env.example .env
-install -d -m 700 -o 10001 -g 10001 secrets
+mkdir opsdeck
+cd opsdeck
+curl -fL https://raw.githubusercontent.com/Qwerto107/OpsDeck/main/compose.yaml -o compose.yaml
+curl -fL https://raw.githubusercontent.com/Qwerto107/OpsDeck/main/.env.example -o .env
+chmod 600 .env
 ```
 
-编辑 `.env`，设置数据库密码、访问地址 `APP_URL` 和管理员名。在 `secrets/admin-password` 写入 12 至 72 字节的初始密码，设置所有者为 `10001:10001`、权限为 `600`。项目没有默认密码。
+在 `.env` 中填写 `DATABASE_URL`，先在 PostgreSQL 中创建空数据库和专用账号，再启动：
 
 ```sh
-docker compose build
-docker compose up -d postgres
-docker compose run --rm migrate
-docker compose --profile setup run --rm init
-docker compose up -d api
+docker compose up -d
+docker compose logs api
 ```
 
-1. 配置 [外置 Nginx](deploy/nginx.conf.example)，使访问地址与 `APP_URL` 一致。仅本机试用时可设为 `http://127.0.0.1:8080`。
-2. 使用配置的管理员账号登录。初始化后安全移出初始密码文件，保留 `secrets/master.key`。
+管理员名默认 `admin`，可用 `INIT_USERNAME` 自定义。临时密码自动生成，仅在首次初始化成功后的日志中输出一次，首次登录必须修改。主密钥固定保存在 `./secrets/master.key`，后续启动不会重置密码或替换密钥。
+
+需要同时部署 PostgreSQL 时，使用独立的 [compose.postgres.yaml](compose.postgres.yaml)，填写 `POSTGRES_PASSWORD` 后执行 `docker compose -f compose.postgres.yaml up -d`，无需外部数据库。
+
+这套配置适用于 `v0.1.4` 起的镜像；旧版本请使用对应标签的部署文档。也可选择 [源码构建](docs/deployment.md#从源码构建)。
+
+1. 配置 [外置 Nginx](deploy/nginx.conf.example)，本机可直接打开 <http://127.0.0.1:8080>。
+2. 登录后，在系统设置填写访问地址和可信代理。配置 OAuth2 前先确定固定访问地址。
 3. 按 [腾讯云 CAM](docs/tencent-cam.md) 或 [阿里云 RAM](docs/alibaba-ram.md) 配置权限，再添加云账号。
 4. 等待首次同步完成，配置角色资源范围。后续在资源页面点击“更新”同步数据。
 

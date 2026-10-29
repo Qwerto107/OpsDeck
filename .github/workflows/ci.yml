@@ -14,6 +14,9 @@ on:
         "web/**",
         "scripts/**",
         "compose.yaml",
+        "compose.build.yaml",
+        "compose.postgres.yaml",
+        "deploy/docker-entrypoint.sh",
         ".github/**",
         "Dockerfile",
         ".dockerignore",
@@ -32,6 +35,9 @@ on:
         "web/**",
         "scripts/**",
         "compose.yaml",
+        "compose.build.yaml",
+        "compose.postgres.yaml",
+        "deploy/docker-entrypoint.sh",
         ".github/**",
         "Dockerfile",
         ".dockerignore",
@@ -210,11 +216,8 @@ jobs:
             sleep 1
           done
           docker volume create opsdeck-check-secrets
-          docker run --rm --user 0 --entrypoint sh -v opsdeck-check-secrets:/run/opsdeck-secrets opsdeck:check -c 'chown 10001:10001 /run/opsdeck-secrets'
           export DATABASE_URL='postgres://opsdeck:ci-test-password@opsdeck-pg:5432/opsdeck?sslmode=disable'
-          docker run --rm --network opsdeck-check -e DATABASE_URL opsdeck:check migrate
-          docker run --rm --network opsdeck-check -e DATABASE_URL -e INIT_USERNAME=ci-admin -e INIT_PASSWORD=ci-initial-password -v opsdeck-check-secrets:/run/opsdeck-secrets opsdeck:check init
-          docker run -d --name opsdeck-check --network opsdeck-check -e DATABASE_URL -e APP_URL=http://127.0.0.1:7979 -v opsdeck-check-secrets:/run/opsdeck-secrets:ro -p 127.0.0.1:7979:8080 opsdeck:check
+          docker run -d --name opsdeck-check --network opsdeck-check --user 0:0 --read-only --tmpfs /tmp -e DATABASE_URL -e INIT_USERNAME=ci-admin -v opsdeck-check-secrets:/run/opsdeck-secrets -p 127.0.0.1:7979:8080 opsdeck:check bootstrap
       - name: 检查程序健康状态及首页
         run: |
           for attempt in {1..30}; do

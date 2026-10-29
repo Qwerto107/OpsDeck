@@ -8,22 +8,18 @@
 
 ## 本地启动
 
-以下命令使用 Linux shell。Windows PowerShell 使用 `$env:变量名='值'`。先准备专用 PostgreSQL 数据库和一个 12 至 72 字节的初始密码文件。
+以下命令使用 Linux shell。Windows PowerShell 使用 `$env:变量名='值'`。先准备专用 PostgreSQL 数据库。管理员名默认 admin，首次临时密码自动生成并仅输出到初始化日志一次。
 
 ```sh
 export DATABASE_URL='postgres://opsdeck:replace-with-db-password@127.0.0.1:5432/opsdeck?sslmode=disable'
 export MASTER_KEY_FILE='./secrets/master.key'
-export APP_URL='http://localhost:5173'
 export LISTEN_ADDR='127.0.0.1:8080'
-go run ./cmd/opsdeck migrate
 
 export INIT_USERNAME='admin'
-export INIT_PASSWORD_FILE='./secrets/admin-password'
-go run ./cmd/opsdeck init
-go run ./cmd/opsdeck all
+go run ./cmd/opsdeck bootstrap
 ```
 
-初始化仅允许在没有用户时创建管理员，不会重置已有密码。主密钥首次初始化生成，后续复用。初始化完成后安全移出密码文件。
+初始化仅在没有用户时创建管理员，首次登录必须修改临时密码。后续启动保留密码和主密钥，不会再次输出临时密码。访问地址和可信代理在系统设置中调整。
 
 另开终端启动前端：
 
@@ -33,7 +29,7 @@ npm ci
 npm run dev
 ```
 
-Vite 将 `/api` 转发到 `127.0.0.1:8080`。浏览器使用 <http://localhost:5173>，与 `APP_URL` 保持一致；不要混用 `localhost` 和 `127.0.0.1`。
+Vite 将 `/api` 转发到 `127.0.0.1:8080`。浏览器使用 <http://localhost:5173>，访问地址设置可留空，或填写此前端地址；不要混用 `localhost` 和 `127.0.0.1`。
 
 ## 构建单文件程序
 

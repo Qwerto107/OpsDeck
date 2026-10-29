@@ -31,20 +31,25 @@ RUN case "${TARGETARCH}/${TARGETVARIANT}" in \
 FROM --platform=$BUILDPLATFORM alpine:3.23 AS runtime-files
 RUN apk add --no-cache ca-certificates tzdata \
     && addgroup -g 10001 opsdeck \
-    && adduser -D -H -u 10001 -G opsdeck opsdeck
+    && adduser -D -H -u 10001 -G opsdeck opsdeck \
+    && mkdir -p /run/opsdeck-secrets \
+    && chown 10001:10001 /run/opsdeck-secrets \
+    && chmod 0700 /run/opsdeck-secrets
 
 FROM alpine:3.23 AS runtime
 COPY --from=runtime-files /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY --from=runtime-files /usr/share/zoneinfo /usr/share/zoneinfo
 COPY --from=runtime-files /etc/passwd /etc/passwd
 COPY --from=runtime-files /etc/group /etc/group
+COPY --from=runtime-files --chown=10001:10001 /run/opsdeck-secrets/ /run/opsdeck-secrets/
 WORKDIR /app
+COPY --chmod=0755 deploy/docker-entrypoint.sh /usr/local/bin/opsdeck-entrypoint
 USER 10001:10001
 ENV LISTEN_ADDR=0.0.0.0:8080 MASTER_KEY_FILE=/run/opsdeck-secrets/master.key
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
     CMD wget -q -O /dev/null http://127.0.0.1:8080/healthz || exit 1
-ENTRYPOINT ["/app/opsdeck"]
+ENTRYPOINT ["/usr/local/bin/opsdeck-entrypoint"]
 CMD ["all"]
 
 FROM --platform=$BUILDPLATFORM alpine:3.23 AS release-binary

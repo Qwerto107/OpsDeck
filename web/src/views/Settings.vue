@@ -27,6 +27,7 @@ const session = useSession(),
   settings = reactive<Settings>({
     ...session.settings,
     metrics: [...session.settings.metrics],
+    trusted_proxies: [...session.settings.trusted_proxies],
   }),
   providers = ref<Provider[]>([]),
   busy = ref(false),
@@ -34,6 +35,7 @@ const session = useSession(),
   modal = ref(false),
   providerBusy = ref(false);
 let oldRetention = settings.retention_days;
+const trustedProxies = ref(settings.trusted_proxies.join("\n"));
 const blank = () => ({
   id: 0,
   name: "",
@@ -59,6 +61,7 @@ async function load() {
   error.value = "";
   try {
     Object.assign(settings, await api("/settings"));
+    trustedProxies.value = settings.trusted_proxies.join("\n");
     oldRetention = settings.retention_days;
     providers.value = await api("/providers");
   } catch (e) {
@@ -71,10 +74,19 @@ async function commit(confirmed = false) {
     const saved = await api<Settings>(
       "/settings",
       "PUT",
-      settings,
+      {
+        ...settings,
+        trusted_proxies: trustedProxies.value
+          .split(/[\n,]+/)
+          .map((item) => item.trim())
+          .filter(Boolean),
+      },
       confirmed ? { "X-Confirm-Retention": "true" } : {},
     );
     session.settings = saved;
+    Object.assign(settings, saved);
+    trustedProxies.value = saved.trusted_proxies.join("\n");
+    providers.value = await api("/providers");
     oldRetention = saved.retention_days;
     message.success("设置已保存");
   } catch (e) {
@@ -139,6 +151,42 @@ onMounted(load);
 <template>
   <n-alert v-if="error" type="error" class="error-banner">{{ error }}</n-alert>
   <div class="settings-form">
+    <section class="panel">
+      <h2>访问与代理</h2>
+      <p class="section-description">
+        保存后立即生效，用于请求来源校验、登录 Cookie 和 OAuth2 回调地址。
+      </p>
+      <div class="form-line">
+        <label for="app-url">访问地址</label>
+        <div class="control">
+          <n-input
+            :input-props="{ id: 'app-url' }"
+            v-model:value="settings.app_url"
+            placeholder="https://opsdeck.example.com"
+          />
+          <div class="hint">
+            留空时按当前访问地址校验。填写协议、域名和端口，不包含路径；修改后请同步更新身份平台中的
+            OAuth2 回调地址。
+          </div>
+        </div>
+      </div>
+      <div class="form-line">
+        <label for="trusted-proxies">可信代理</label>
+        <div class="control">
+          <n-input
+            :input-props="{ id: 'trusted-proxies' }"
+            v-model:value="trustedProxies"
+            type="textarea"
+            :autosize="{ minRows: 3, maxRows: 6 }"
+            placeholder="每行一个 IP 或 CIDR 网段"
+          />
+          <div class="hint">
+            留空时不信任转发头。仅填写实际反向代理的 IPv4、IPv6 地址或 CIDR
+            网段，用于登录限流和审计来源 IP。
+          </div>
+        </div>
+      </div>
+    </section>
     <section class="panel">
       <h2>监控设置</h2>
       <p class="section-description">

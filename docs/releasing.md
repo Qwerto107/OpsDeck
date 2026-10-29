@@ -30,9 +30,9 @@
 更新 `web/package.json`、`web/package-lock.json` 和 [更新记录](changelog.md)，完成本地检查。遵循项目提交授权规则，采用 Conventional Commits，再创建新标签。不要覆盖已推送的版本标签。
 
 ```sh
-git tag -a v0.1.2 -m "release: v0.1.2"
+git tag -a v0.1.4 -m "release: v0.1.4"
 git push origin main
-git push origin v0.1.2
+git push origin v0.1.4
 ```
 
 代码与标签推送完成后即可回报，不跟踪或等待 GitHub Actions。回报只能确认已经完成的操作；云端构建、镜像及 Release 结果以工作流为准。
@@ -40,12 +40,12 @@ git push origin v0.1.2
 正式版本构建成功后发布：
 
 ```text
-ghcr.io/qwerto107/opsdeck:0.1.2
+ghcr.io/qwerto107/opsdeck:0.1.4
 ghcr.io/qwerto107/opsdeck:latest
 ghcr.io/qwerto107/opsdeck:sha-<完整提交SHA>
 ```
 
-预发布只更新自身版本和提交标签，不更新 `latest`。手动镜像发布仅支持 main，生成提交标签。镜像使用方式见 [部署指南](deployment.md#使用发布镜像)。
+预发布只更新自身版本和提交标签，不更新 `latest`。手动镜像发布仅支持 main，生成提交标签。镜像使用方式见 [部署指南](deployment.md)。
 
 ## Release 与权限
 

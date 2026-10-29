@@ -460,6 +460,24 @@ func (a *App) saveSettings(c *gin.Context) {
 			return
 		}
 	}
+	s.AppURL = strings.TrimSuffix(strings.TrimSpace(s.AppURL), "/")
+	if !validAppURL(s.AppURL) {
+		bad(c, "访问地址需为 HTTP/HTTPS 访问源，不包含路径、参数或账号信息")
+		return
+	}
+	if s.TrustedProxies == nil {
+		s.TrustedProxies = []string{}
+	}
+	for i := range s.TrustedProxies {
+		s.TrustedProxies[i] = strings.TrimSpace(s.TrustedProxies[i])
+	}
+	if len(s.TrustedProxies) > 100 || (&gin.Engine{}).SetTrustedProxies(s.TrustedProxies) != nil {
+		bad(c, "可信代理最多 100 项，每项需为有效的 IPv4、IPv6 地址或 CIDR 网段")
+		return
+	}
+	// 保存和应用运行配置保持同一顺序，避免并发保存后内存状态与数据库不一致。
+	a.runtimeMu.Lock()
+	defer a.runtimeMu.Unlock()
 	old, err := a.settings()
 	if err != nil {
 		fail(c, 503, "无法读取设置")
@@ -470,7 +488,19 @@ func (a *App) saveSettings(c *gin.Context) {
 		return
 	}
 	s.ID = 1
-	if a.mutation(c, "settings.save", "global", func(tx *gorm.DB) error { return tx.Save(&s).Error }) {
+	if a.mutation(c, "settings.save", "global", func(tx *gorm.DB) error {
+		if err := tx.Save(&s).Error; err != nil {
+			return err
+		}
+		if s.AppURL != "" && s.AppURL != old.AppURL {
+			return tx.Model(&OAuthProvider{}).Where("1=1").Update("redirect_url", gorm.Expr("? || '/api/oauth/' || id || '/callback'", s.AppURL)).Error
+		}
+		return nil
+	}) {
+		a.runtimeURL = s.AppURL
+		if a.router != nil {
+			_ = a.router.SetTrustedProxies(s.TrustedProxies)
+		}
 		c.JSON(200, s)
 	}
 }
