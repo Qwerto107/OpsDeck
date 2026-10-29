@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	sdk "github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common"
@@ -30,7 +31,10 @@ type CloudError struct {
 	Definite                             bool
 }
 
-type Tencent struct{ Key cipher.AEAD }
+type Tencent struct {
+	Key      cipher.AEAD
+	requests cloudRequests
+}
 
 func (t *Tencent) Regions(ctx context.Context, ac CloudAccount, kind string) ([]string, error) {
 	service, version := "region", "2022-06-27"
@@ -83,6 +87,11 @@ func availableRegions(body map[string]any) ([]string, error) {
 
 func (t *Tencent) call(ctx context.Context, ac CloudAccount, region, service, version, action string, params map[string]any) (_ map[string]any, returnedError error) {
 	defer func() { returnedError = reportCloudError(ctx, ac, region, service, action, returnedError) }()
+	release, err := t.requests.acquireMonitor(ctx, ac, action)
+	if err != nil {
+		return nil, networkCloudError(err)
+	}
+	defer release()
 	id, e := Decrypt(t.Key, ac.SecretID)
 	if e != nil {
 		return nil, &CloudError{Code: "CredentialDecryptFailed", Definite: true}
@@ -101,6 +110,7 @@ func (t *Tencent) call(ctx context.Context, ac CloudAccount, region, service, ve
 	cp.UnsafeRetryOnConnectionFailure = false
 	cp.DisableRegionBreaker = true
 	client := sdk.NewCommonClient(sdk.NewCredential(id, key), region, cp)
+	client.WithHttpTransport(t.requests.httpTransport())
 	request := sdkhttp.NewCommonRequest(service, version, action)
 	request.SetContext(ctx)
 	if e = request.SetActionParameters(params); e != nil {
@@ -320,6 +330,8 @@ func (t *Tencent) MonitorBatch(ctx context.Context, ac CloudAccount, rows []Reso
 	}
 	// 腾讯云每次只允许同一地域、命名空间的一个指标，最多携带 50 个实例。
 	end := time.Now().UTC()
+	var resultMu sync.Mutex
+	queries := []func(){}
 	for start := 0; start < len(running); start += 50 {
 		ids := running[start:min(start+50, len(running))]
 		instances := make([]any, 0, len(ids))
@@ -334,53 +346,68 @@ func (t *Tencent) MonitorBatch(ctx context.Context, ac CloudAccount, rows []Reso
 			if names[key] == "" {
 				continue
 			}
-			body, err := t.call(ctx, ac, region, "monitor", "2018-07-24", "GetMonitorData", map[string]any{"Namespace": namespace, "MetricName": names[key], "Period": 60, "StartTime": end.Add(-5 * time.Minute).Format(time.RFC3339), "EndTime": end.Format(time.RFC3339), "Instances": instances})
-			if err != nil {
-				for _, id := range ids {
-					m := out[id][key]
-					m.Status = "error"
-					m.Reason = "云监控请求失败：" + err.Error()
-					out[id][key] = m
-				}
-				continue
+			samples := make(map[string]Metric)
+			for _, id := range ids {
+				samples[id] = out[id][key]
 			}
-			// 响应可能乱序或缺少实例，必须用维度中的实例 ID 匹配，不能依赖数组下标。
-			for _, item := range array(body, "DataPoints") {
-				dp, ok := item.(map[string]any)
-				if !ok {
-					continue
-				}
-				id := ""
-				for _, d := range array(dp, "Dimensions") {
-					if dim, ok := d.(map[string]any); ok && str(dim, "Name") == dimension {
-						id = str(dim, "Value")
+			queries = append(queries, func() {
+				// 查询在独立结果中完成，只在合并时锁定共享快照。
+				defer func() {
+					resultMu.Lock()
+					defer resultMu.Unlock()
+					for id, metric := range samples {
+						out[id][key] = metric
 					}
+				}()
+				body, err := t.call(ctx, ac, region, "monitor", "2018-07-24", "GetMonitorData", map[string]any{"Namespace": namespace, "MetricName": names[key], "Period": 60, "StartTime": end.Add(-5 * time.Minute).Format(time.RFC3339), "EndTime": end.Format(time.RFC3339), "Instances": instances})
+				if err != nil {
+					for _, id := range ids {
+						m := samples[id]
+						m.Status = "error"
+						m.Reason = "云监控请求失败：" + err.Error()
+						samples[id] = m
+					}
+					return
 				}
-				if !requested[id] {
-					continue
+				// 响应可能乱序或缺少实例，必须用维度中的实例 ID 匹配，不能依赖数组下标。
+				for _, item := range array(body, "DataPoints") {
+					dp, ok := item.(map[string]any)
+					if !ok {
+						continue
+					}
+					id := ""
+					for _, d := range array(dp, "Dimensions") {
+						if dim, ok := d.(map[string]any); ok && str(dim, "Name") == dimension {
+							id = str(dim, "Value")
+						}
+					}
+					if !requested[id] {
+						continue
+					}
+					values, times := array(dp, "Values"), array(dp, "Timestamps")
+					if len(values) == 0 || len(values) != len(times) {
+						continue
+					}
+					index := len(values) - 1
+					value, ok := values[index].(float64)
+					ts, okTime := times[index].(float64)
+					if !ok || !okTime {
+						continue
+					}
+					sampled := time.Unix(int64(ts), 0)
+					m := samples[id]
+					m.Value = &value
+					m.SampledAt = &sampled
+					m.Status = "ok"
+					m.Reason = ""
+					if key == "disk" && !isDatabase(kind) {
+						m.Reason = "云端实例级空间使用率；未返回挂载点明细"
+					}
+					samples[id] = m
 				}
-				values, times := array(dp, "Values"), array(dp, "Timestamps")
-				if len(values) == 0 || len(values) != len(times) {
-					continue
-				}
-				index := len(values) - 1
-				value, ok := values[index].(float64)
-				ts, okTime := times[index].(float64)
-				if !ok || !okTime {
-					continue
-				}
-				sampled := time.Unix(int64(ts), 0)
-				m := out[id][key]
-				m.Value = &value
-				m.SampledAt = &sampled
-				m.Status = "ok"
-				m.Reason = ""
-				if key == "disk" && !isDatabase(kind) {
-					m.Reason = "云端实例级空间使用率；未返回挂载点明细"
-				}
-				out[id][key] = m
-			}
+			})
 		}
 	}
+	runMonitorQueries(queries)
 	return out
 }

@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -37,9 +38,9 @@ func monitorClient(t *testing.T, respond func(map[string]any) map[string]any) (*
 }
 
 func TestMonitorBatchChunksAndMatchesInstanceDimensions(t *testing.T) {
-	calls := 0
+	var calls atomic.Int32
 	client, ac := monitorClient(t, func(params map[string]any) map[string]any {
-		calls++
+		calls.Add(1)
 		instances := array(params, "Instances")
 		if len(instances) > 50 {
 			t.Errorf("批次超过腾讯云上限: %d", len(instances))
@@ -61,8 +62,8 @@ func TestMonitorBatchChunksAndMatchesInstanceDimensions(t *testing.T) {
 	}
 	rows = append(rows, Resource{AccountID: ac.ID, Kind: "cvm", Region: "ap-beijing", InstanceID: "stopped", State: "STOPPED"})
 	out := client.MonitorBatch(context.Background(), ac, rows, []string{"cpu", "disk"})
-	if calls != 4 {
-		t.Fatalf("51 台实例的两个指标应为 4 次请求，实际 %d", calls)
+	if calls.Load() != 4 {
+		t.Fatalf("51 台实例的两个指标应为 4 次请求，实际 %d", calls.Load())
 	}
 	if out["ins-000"]["cpu"].Value == nil || *out["ins-000"]["cpu"].Value != 0 {
 		t.Fatal("乱序响应没有正确匹配实例，或零值被丢弃")

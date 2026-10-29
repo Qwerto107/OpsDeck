@@ -11,6 +11,7 @@ import (
 func (a *Alibaba) monitorDatabases(ctx context.Context, ac CloudAccount, rows []Resource) map[string]map[string]Metric {
 	out := map[string]map[string]Metric{}
 	end := time.Now().UTC()
+	queries := []func(){}
 	for _, r := range rows {
 		metrics := map[string]Metric{}
 		for _, key := range []string{"cpu", "memory", "disk", "connections"} {
@@ -35,60 +36,63 @@ func (a *Alibaba) monitorDatabases(ctx context.Context, ac CloudAccount, rows []
 			}
 			continue
 		}
-		keys := "MySQL_MemCpuUsage,MySQL_DetailedSpaceUsage,MySQL_Sessions"
-		if r.Kind == "postgresql" {
-			keys = "CpuUsage,MemoryUsage,PgSQL_SpaceUsage,PgSQL_Session"
-		}
-		// RDS 性能接口支持一次查询多个指标，但不支持跨实例批量查询。
-		body, err := a.call(ctx, ac, r.Region, "rds", "2014-08-15", "DescribeDBInstancePerformance", map[string]string{
-			"DBInstanceId": r.InstanceID, "Key": keys,
-			"StartTime": end.Add(-10 * time.Minute).Format("2006-01-02T15:04Z"),
-			"EndTime":   end.Format("2006-01-02T15:04Z"),
-		})
-		if err != nil || str(body, "DBInstanceId") != r.InstanceID {
-			reason := "数据库监控响应与请求实例不匹配"
-			if err != nil {
-				reason = "数据库监控请求失败：" + err.Error()
+		queries = append(queries, func() {
+			keys := "MySQL_MemCpuUsage,MySQL_DetailedSpaceUsage,MySQL_Sessions"
+			if r.Kind == "postgresql" {
+				keys = "CpuUsage,MemoryUsage,PgSQL_SpaceUsage,PgSQL_Session"
 			}
-			for key, metric := range metrics {
-				metric.Status, metric.Reason = "error", reason
-				metrics[key] = metric
-			}
-			continue
-		}
-		for _, item := range array(obj(body, "PerformanceKeys"), "PerformanceKey") {
-			entry, _ := item.(map[string]any)
-			for _, point := range array(obj(entry, "Values"), "PerformanceValue") {
-				dp, _ := point.(map[string]any)
-				sampled, err := time.Parse(time.RFC3339, str(dp, "Date"))
+			// RDS 性能接口支持一次查询多个指标，但不支持跨实例批量查询。
+			body, err := a.call(ctx, ac, r.Region, "rds", "2014-08-15", "DescribeDBInstancePerformance", map[string]string{
+				"DBInstanceId": r.InstanceID, "Key": keys,
+				"StartTime": end.Add(-10 * time.Minute).Format("2006-01-02T15:04Z"),
+				"EndTime":   end.Format("2006-01-02T15:04Z"),
+			})
+			if err != nil || str(body, "DBInstanceId") != r.InstanceID {
+				reason := "数据库监控响应与请求实例不匹配"
 				if err != nil {
-					continue
+					reason = "数据库监控请求失败：" + err.Error()
 				}
-				values := strings.Split(str(dp, "Value"), "&")
-				formats := strings.Split(strings.ToLower(str(entry, "ValueFormat")), "&")
-				if len(values) != len(formats) {
-					continue
-				}
-				for index, text := range values {
-					key, divisor := rdsMetric(str(entry, "Key"), strings.TrimSpace(formats[index]), str(entry, "Unit"), r.Disk)
-					value, err := strconv.ParseFloat(text, 64)
-					if key == "" || divisor <= 0 || err != nil || math.IsNaN(value) || math.IsInf(value, 0) || value < 0 {
-						continue
-					}
-					metric := metrics[key]
-					if metric.SampledAt != nil && !sampled.After(*metric.SampledAt) {
-						continue
-					}
-					value /= divisor
-					metric.Value, metric.SampledAt, metric.Status, metric.Reason = &value, &sampled, "ok", ""
-					if key == "disk" {
-						metric.Reason = "实例已用空间 / 配置存储容量"
-					}
+				for key, metric := range metrics {
+					metric.Status, metric.Reason = "error", reason
 					metrics[key] = metric
 				}
+				return
 			}
-		}
+			for _, item := range array(obj(body, "PerformanceKeys"), "PerformanceKey") {
+				entry, _ := item.(map[string]any)
+				for _, point := range array(obj(entry, "Values"), "PerformanceValue") {
+					dp, _ := point.(map[string]any)
+					sampled, err := time.Parse(time.RFC3339, str(dp, "Date"))
+					if err != nil {
+						continue
+					}
+					values := strings.Split(str(dp, "Value"), "&")
+					formats := strings.Split(strings.ToLower(str(entry, "ValueFormat")), "&")
+					if len(values) != len(formats) {
+						continue
+					}
+					for index, text := range values {
+						key, divisor := rdsMetric(str(entry, "Key"), strings.TrimSpace(formats[index]), str(entry, "Unit"), r.Disk)
+						value, err := strconv.ParseFloat(text, 64)
+						if key == "" || divisor <= 0 || err != nil || math.IsNaN(value) || math.IsInf(value, 0) || value < 0 {
+							continue
+						}
+						metric := metrics[key]
+						if metric.SampledAt != nil && !sampled.After(*metric.SampledAt) {
+							continue
+						}
+						value /= divisor
+						metric.Value, metric.SampledAt, metric.Status, metric.Reason = &value, &sampled, "ok", ""
+						if key == "disk" {
+							metric.Reason = "实例已用空间 / 配置存储容量"
+						}
+						metrics[key] = metric
+					}
+				}
+			}
+		})
 	}
+	runMonitorQueries(queries)
 	return out
 }
 

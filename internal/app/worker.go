@@ -16,8 +16,21 @@ import (
 func (a *App) RunWorker(ctx context.Context) {
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
+	var pending sync.WaitGroup
+	defer pending.Wait()
+	monitorDone := make(chan struct{}, monitorConcurrency)
+	inFlight := 0
 	nextCleanup := time.Time{}
 	for {
+	drain:
+		for {
+			select {
+			case <-monitorDone:
+				inFlight--
+			default:
+				break drain
+			}
+		}
 		if ctx.Err() != nil {
 			return
 		}
@@ -25,17 +38,20 @@ func (a *App) RunWorker(ctx context.Context) {
 			a.cleanup()
 			nextCleanup = time.Now().Add(time.Hour)
 		}
-		var task Task
-		err := a.DB.Transaction(func(tx *gorm.DB) error {
-			if e := tx.Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"}).Where("status IN ? AND next_run <= now() AND (lease_until IS NULL OR lease_until < now())", []string{"queued", "submitting", "waiting", "unknown"}).Order("next_run,id").First(&task).Error; e != nil {
-				return e
-			}
-			lease := time.Now().Add(6 * time.Minute)
-			task.LeaseUntil = &lease
-			return tx.Model(&task).Updates(map[string]any{"lease_until": lease}).Error
-		})
+		task, err := a.claimTask(ctx, inFlight < monitorConcurrency)
 		if err == nil {
-			a.process(ctx, task)
+			if task.Action == "monitor" && task.AccountID != nil {
+				inFlight++
+				pending.Add(1)
+				go func() {
+					defer pending.Done()
+					defer func() { monitorDone <- struct{}{} }()
+					a.process(ctx, task)
+				}()
+			} else {
+				// 仅监控任务并行，服务器操作及结果核对继续由主循环处理。
+				a.process(ctx, task)
+			}
 			continue
 		}
 		if !errors.Is(err, gorm.ErrRecordNotFound) {
@@ -45,8 +61,36 @@ func (a *App) RunWorker(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+		case <-monitorDone:
+			inFlight--
 		}
 	}
+}
+
+func (a *App) claimTask(ctx context.Context, allowMonitor bool) (Task, error) {
+	var task Task
+	err := a.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		query := tx.Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"}).
+			Where("status IN ? AND next_run <= now() AND (lease_until IS NULL OR lease_until < now())", []string{"queued", "submitting", "waiting", "unknown"})
+		if !allowMonitor {
+			query = query.Where("action <> 'monitor'")
+		}
+		// 只领取账号当前最早的到期任务，跨 Worker 也不能绕过已领取或更早的任务。
+		query = query.Where(`NOT EXISTS (
+			SELECT 1 FROM tasks previous
+			WHERE previous.account_id = tasks.account_id AND previous.id <> tasks.id
+			AND previous.status IN ('queued','submitting','waiting','unknown')
+			AND (previous.lease_until > now() OR
+				(previous.next_run <= now() AND (previous.next_run,previous.id) < (tasks.next_run,tasks.id)))
+		)`)
+		if err := query.Order("next_run,id").First(&task).Error; err != nil {
+			return err
+		}
+		lease := time.Now().Add(6 * time.Minute)
+		task.LeaseUntil = &lease
+		return tx.Model(&task).Update("lease_until", lease).Error
+	})
+	return task, err
 }
 func (a *App) cleanup() {
 	s, e := a.settings()

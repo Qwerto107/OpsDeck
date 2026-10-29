@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aliyun/alibaba-cloud-sdk-go/sdk"
@@ -17,16 +18,27 @@ import (
 	"github.com/aliyun/alibaba-cloud-sdk-go/sdk/requests"
 )
 
-type Alibaba struct{ Key cipher.AEAD }
-type contextTransport struct{ ctx context.Context }
+type Alibaba struct {
+	Key      cipher.AEAD
+	requests cloudRequests
+}
+type contextTransport struct {
+	ctx  context.Context
+	base http.RoundTripper
+}
 
 func (t contextTransport) RoundTrip(r *http.Request) (*http.Response, error) {
-	return http.DefaultTransport.RoundTrip(r.WithContext(t.ctx))
+	return t.base.RoundTrip(r.WithContext(t.ctx))
 }
 
 // SDK 负责签名；错误仅保留脱敏说明和接口上下文，不记录凭证或签名请求。
 func (a *Alibaba) call(ctx context.Context, ac CloudAccount, region, service, version, action string, params map[string]string) (_ map[string]any, returnedError error) {
 	defer func() { returnedError = reportCloudError(ctx, ac, region, service, action, returnedError) }()
+	release, err := a.requests.acquireMonitor(ctx, ac, action)
+	if err != nil {
+		return nil, networkCloudError(err)
+	}
+	defer release()
 	id, e := Decrypt(a.Key, ac.SecretID)
 	if e != nil {
 		return nil, &CloudError{Code: "CredentialDecryptFailed", Definite: true}
@@ -39,7 +51,7 @@ func (a *Alibaba) call(ctx context.Context, ac CloudAccount, region, service, ve
 	config.Scheme = "HTTPS"
 	config.Timeout = 15 * time.Second
 	config.AutoRetry = false
-	config.Transport = contextTransport{ctx}
+	config.Transport = contextTransport{ctx: ctx, base: a.requests.httpTransport()}
 	client, e := sdk.NewClientWithOptions(region, config, &credentials.AccessKeyCredential{AccessKeyId: id, AccessKeySecret: key})
 	if e != nil {
 		return nil, &CloudError{Code: "CloudClientFailed", Definite: true}
@@ -348,6 +360,8 @@ func (a *Alibaba) MonitorBatch(ctx context.Context, ac CloudAccount, rows []Reso
 		}
 	}
 	end := time.Now().UTC()
+	var resultMu sync.Mutex
+	queries := []func(){}
 	for start := 0; start < len(ids); start += 50 {
 		batch := ids[start:min(start+50, len(ids))]
 		dims := []map[string]string{}
@@ -359,72 +373,87 @@ func (a *Alibaba) MonitorBatch(ctx context.Context, ac CloudAccount, rows []Reso
 			if names[key] == "" {
 				continue
 			}
-			token := ""
-			seen := map[string]bool{}
-			for {
-				period := periods[key]
-				if period == "" {
-					period = "60"
-				}
-				params := map[string]string{"Namespace": namespace, "MetricName": names[key], "Dimensions": string(encoded), "Period": period, "StartTime": strconv.FormatInt(end.Add(-5*time.Minute).UnixMilli(), 10), "EndTime": strconv.FormatInt(end.UnixMilli(), 10), "Length": "1000"}
-				if token != "" {
-					params["NextToken"] = token
-				}
-				body, e := a.call(ctx, ac, region, "metrics", "2019-01-01", "DescribeMetricList", params)
-				if e != nil {
-					for _, id := range batch {
-						m := out[id][key]
-						m.Status = "error"
-						m.Reason = "云监控请求失败：" + e.Error()
-						out[id][key] = m
-					}
-					break
-				}
-				var points []map[string]any
-				if json.Unmarshal([]byte(str(body, "Datapoints")), &points) != nil {
-					break
-				}
-				for _, dp := range points {
-					id := str(dp, "instanceId")
-					valid := false
-					for _, requested := range batch {
-						valid = valid || requested == id
-					}
-					if !valid {
-						continue
-					}
-					v, ok := dp["Average"].(float64)
-					ts, okTS := dp["timestamp"].(float64)
-					if !ok || !okTS {
-						continue
-					}
-					sampled := time.UnixMilli(int64(ts))
-					m := out[id][key]
-					if units[key] != "" {
-						m.Unit = units[key]
-					}
-					if m.SampledAt != nil && sampled.Before(*m.SampledAt) {
-						continue
-					}
-					if key == "disk" && m.SampledAt != nil && sampled.Equal(*m.SampledAt) && m.Value != nil && v < *m.Value {
-						continue
-					}
-					m.Value = &v
-					m.SampledAt = &sampled
-					m.Status = "ok"
-					m.Reason = ""
-					if key == "disk" {
-						m.Reason = fmt.Sprintf("云监控挂载点最高空间使用率（%s）", str(dp, "device"))
-					}
-					out[id][key] = m
-				}
-				token = str(body, "NextToken")
-				if token == "" || seen[token] {
-					break
-				}
-				seen[token] = true
+			values := make(map[string]Metric)
+			for _, id := range batch {
+				values[id] = out[id][key]
 			}
+			queries = append(queries, func() {
+				// 查询在独立结果中完成，只在合并时锁定共享快照。
+				defer func() {
+					resultMu.Lock()
+					defer resultMu.Unlock()
+					for id, metric := range values {
+						out[id][key] = metric
+					}
+				}()
+				token := ""
+				seen := map[string]bool{}
+				for {
+					period := periods[key]
+					if period == "" {
+						period = "60"
+					}
+					params := map[string]string{"Namespace": namespace, "MetricName": names[key], "Dimensions": string(encoded), "Period": period, "StartTime": strconv.FormatInt(end.Add(-5*time.Minute).UnixMilli(), 10), "EndTime": strconv.FormatInt(end.UnixMilli(), 10), "Length": "1000"}
+					if token != "" {
+						params["NextToken"] = token
+					}
+					body, e := a.call(ctx, ac, region, "metrics", "2019-01-01", "DescribeMetricList", params)
+					if e != nil {
+						for _, id := range batch {
+							m := values[id]
+							m.Status = "error"
+							m.Reason = "云监控请求失败：" + e.Error()
+							values[id] = m
+						}
+						break
+					}
+					var points []map[string]any
+					if json.Unmarshal([]byte(str(body, "Datapoints")), &points) != nil {
+						break
+					}
+					for _, dp := range points {
+						id := str(dp, "instanceId")
+						valid := false
+						for _, requested := range batch {
+							valid = valid || requested == id
+						}
+						if !valid {
+							continue
+						}
+						v, ok := dp["Average"].(float64)
+						ts, okTS := dp["timestamp"].(float64)
+						if !ok || !okTS {
+							continue
+						}
+						sampled := time.UnixMilli(int64(ts))
+						m := values[id]
+						if units[key] != "" {
+							m.Unit = units[key]
+						}
+						if m.SampledAt != nil && sampled.Before(*m.SampledAt) {
+							continue
+						}
+						if key == "disk" && m.SampledAt != nil && sampled.Equal(*m.SampledAt) && m.Value != nil && v < *m.Value {
+							continue
+						}
+						m.Value = &v
+						m.SampledAt = &sampled
+						m.Status = "ok"
+						m.Reason = ""
+						if key == "disk" {
+							m.Reason = fmt.Sprintf("云监控挂载点最高空间使用率（%s）", str(dp, "device"))
+						}
+						values[id] = m
+					}
+					token = str(body, "NextToken")
+					if token == "" || seen[token] {
+						break
+					}
+					seen[token] = true
+				}
+			})
 		}
 	}
+	runMonitorQueries(queries)
 	return out
 }

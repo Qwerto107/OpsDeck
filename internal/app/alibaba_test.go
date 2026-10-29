@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -43,7 +44,7 @@ func alibabaFixture(t *testing.T, handle func(*http.Request) map[string]any) (*A
 	return &Alibaba{Key: key}, CloudAccount{ID: 1, Provider: "alibaba", Site: "international", SecretID: id, SecretKey: secret}
 }
 func TestAlibabaBatchMatchesInstancesAndMounts(t *testing.T) {
-	calls := 0
+	var calls atomic.Int32
 	now := time.Now().UnixMilli()
 	a, ac := alibabaFixture(t, func(r *http.Request) map[string]any {
 		if r.URL.Host != "metrics.ap-southeast-1.aliyuncs.com" || r.URL.Scheme != "https" {
@@ -59,7 +60,7 @@ func TestAlibabaBatchMatchesInstancesAndMounts(t *testing.T) {
 		if len(dims) > 50 {
 			t.Fatal("批量查询超过上限")
 		}
-		calls++
+		calls.Add(1)
 		points := []map[string]any{}
 		for i := len(dims) - 1; i >= 0; i-- {
 			points = append(points, map[string]any{"instanceId": dims[i]["instanceId"], "timestamp": now, "Average": 80, "device": "/data"}, map[string]any{"instanceId": dims[i]["instanceId"], "timestamp": now, "Average": 25, "device": "/"})
@@ -73,8 +74,8 @@ func TestAlibabaBatchMatchesInstancesAndMounts(t *testing.T) {
 		rows = append(rows, Resource{AccountID: ac.ID, Kind: "ecs", Region: "ap-southeast-1", InstanceID: fmt.Sprint(i), State: "RUNNING"})
 	}
 	out := a.MonitorBatch(context.Background(), ac, rows, []string{"disk"})
-	if calls != 2 {
-		t.Fatalf("51 台实例应拆成 2 次请求，实际 %d", calls)
+	if calls.Load() != 2 {
+		t.Fatalf("51 台实例应拆成 2 次请求，实际 %d", calls.Load())
 	}
 	for _, row := range rows {
 		m := out[row.InstanceID]["disk"]

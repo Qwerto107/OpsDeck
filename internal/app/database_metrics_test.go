@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -15,9 +16,9 @@ func TestTencentDatabaseMetricsUseProductDimensions(t *testing.T) {
 		{"postgresql", "", "QCE/POSTGRES", "resourceId"},
 	} {
 		t.Run(test.kind+test.prefix, func(t *testing.T) {
-			calls := 0
+			var calls atomic.Int32
 			client, account := monitorClient(t, func(params map[string]any) map[string]any {
-				calls++
+				calls.Add(1)
 				metric := str(params, "MetricName")
 				if str(params, "Namespace") != test.namespace || !strings.HasPrefix(metric, test.prefix) {
 					t.Fatal("数据库使用了错误的监控命名空间或架构指标")
@@ -30,7 +31,7 @@ func TestTencentDatabaseMetricsUseProductDimensions(t *testing.T) {
 			})
 			row := Resource{AccountID: account.ID, Region: "ap-guangzhou", Kind: test.kind, InstanceID: "db-test", State: "RUNNING", MonitorPrefix: test.prefix}
 			metrics := client.MonitorBatch(context.Background(), account, []Resource{row}, []string{"cpu", "memory", "disk", "connections"})[row.InstanceID]
-			if calls != 4 || len(metrics) != 4 || metrics["connections"].Unit != "个" {
+			if calls.Load() != 4 || len(metrics) != 4 || metrics["connections"].Unit != "个" {
 				t.Fatal("数据库指标数量或连接数单位错误")
 			}
 			for _, metric := range metrics {
@@ -45,9 +46,9 @@ func TestTencentDatabaseMetricsUseProductDimensions(t *testing.T) {
 func TestAlibabaDatabaseMetricsParseFormatsAndStorage(t *testing.T) {
 	for _, kind := range []string{"mysql", "postgresql"} {
 		t.Run(kind, func(t *testing.T) {
-			calls := 0
+			var calls atomic.Int32
 			client, account := alibabaFixture(t, func(request *http.Request) map[string]any {
-				calls++
+				calls.Add(1)
 				if request.URL.Query().Get("Action") != "DescribeDBInstancePerformance" || request.URL.Query().Get("DBInstanceId") != "db-test" {
 					t.Fatal("数据库监控请求错误")
 				}
@@ -70,7 +71,7 @@ func TestAlibabaDatabaseMetricsParseFormatsAndStorage(t *testing.T) {
 					t.Fatalf("%s 的格式、最新采样或单位换算错误: %+v", key, metric)
 				}
 			}
-			if calls != 1 {
+			if calls.Load() != 1 {
 				t.Fatal("同一实例的指标没有合并查询")
 			}
 			if key, _ := rdsMetric("PgSQL_SpaceUsage", "space", "unknown", 4); key != "" {
